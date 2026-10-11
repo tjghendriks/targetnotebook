@@ -242,3 +242,7 @@ label.check {
   font-size: 14px; font-weight: 600; color: var(--ink); cursor: pointer;
 }
 label.check input { width: 20px; height: 20px; accent-color: var(--blue); }
+
+/* Shots still to be accounted for */
+.needs { fill: none; stroke: var(--blue); stroke-width: 1.4; stroke-dasharray: 4 3; }
+.card-list .total.pending, .score-line .big.pending { color: var(--muted); }
