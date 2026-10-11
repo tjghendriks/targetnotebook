@@ -1,0 +1,14 @@
+{
+  "name": "TargetScan",
+  "short_name": "TargetScan",
+  "description": "Score and analyse NSRA 2510BM/89-18 smallbore cards from a photo.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f2ed",
+  "theme_color": "#1f2a24",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

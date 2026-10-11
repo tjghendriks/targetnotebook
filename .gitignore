@@ -1,0 +1,5 @@
+.DS_Store
+
+# Scans of the NSRA card (third-party copyright), kept local only
+*.pdf
+reference/

@@ -1,0 +1,83 @@
+// On-device storage (IndexedDB): saved cards and settings.
+
+import { DEFAULT_SETTINGS } from './model.js';
+
+const DB_NAME = 'targetscan';
+let dbPromise = null;
+
+function open() {
+  dbPromise ??= new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore('cards', { keyPath: 'id' });
+      req.result.createObjectStore('kv');
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+
+async function run(store, mode, fn) {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, mode);
+    const req = fn(tx.objectStore(store));
+    tx.oncomplete = () => resolve(req?.result);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+export const newId = () =>
+  crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+// Newest first.
+export async function listCards() {
+  const cards = await run('cards', 'readonly', (s) => s.getAll());
+  return cards.sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
+}
+
+export const getCard = (id) => run('cards', 'readonly', (s) => s.get(id));
+export const putCard = (card) => run('cards', 'readwrite', (s) => s.put(card));
+export const deleteCard = (id) => run('cards', 'readwrite', (s) => s.delete(id));
+
+export async function getSettings() {
+  const saved = await run('kv', 'readonly', (s) => s.get('settings'));
+  return { ...DEFAULT_SETTINGS, ...saved };
+}
+
+export const putSettings = (settings) => run('kv', 'readwrite', (s) => s.put(settings, 'settings'));
+
+export async function exportData({ images }) {
+  const cards = await listCards();
+  return {
+    app: 'targetscan',
+    version: 1,
+    card: '2510BM/89-18',
+    exportedAt: new Date().toISOString(),
+    settings: await getSettings(),
+    cards: images ? cards : cards.map(({ images: _drop, ...rest }) => rest),
+  };
+}
+
+// Merges by id: cards in the file replace cards with the same id.
+export async function importData(data) {
+  if (data?.app !== 'targetscan' || !Array.isArray(data.cards)) {
+    throw new Error('This is not a TargetScan backup file.');
+  }
+  let count = 0;
+  for (const card of data.cards) {
+    if (!card?.id || !Array.isArray(card.shots) || card.shots.length !== 10) continue;
+    const existing = await getCard(card.id);
+    await putCard({ ...card, images: card.images ?? existing?.images ?? null });
+    count++;
+  }
+  return count;
+}
+
+export async function persistence() {
+  if (!navigator.storage?.persist) return 'unsupported';
+  if (await navigator.storage.persisted()) return 'persistent';
+  return (await navigator.storage.persist()) ? 'persistent' : 'best-effort';
+}

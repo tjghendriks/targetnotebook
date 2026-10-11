@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>TargetScan detector check</title>
+<body style="font:14px/1.5 monospace;padding:16px">
+<p>Scans synthetic cards with shots at known positions and reports the position error (mm) per diagram.
+The blank reference card should report no shots.</p>
+<pre id="out">running…</pre>
+<script type="module">
+import { scanCard } from '../js/detect.js';
+import { drawCard } from './synth.js';
+
+const truth = [
+  { x: 0.4, y: -0.3 }, { x: 3.1, y: 2.2 }, { x: -6.5, y: 1 }, { x: 0, y: 11.9 }, { x: 19.3, y: 0.2 },
+  { x: -17, y: -17.5 }, { x: 9, y: -24 }, { x: -1.2, y: -2.9 }, { x: 27, y: 14 }, { x: 12, y: -0.1 },
+];
+const cases = {
+  'white backing, square on': {},
+  'white backing, rotated + sheared': { rotate: 7, shear: 0.06, pxPerMm: 6 },
+  'grey backing': { backing: '#8a8680', rotate: -3 },
+  'dark backing (expected to struggle)': { backing: '#3a3632' },
+};
+const out = document.getElementById('out');
+const lines = [];
+for (const [name, opts] of Object.entries(cases)) {
+  const r = await scanCard(drawCard(truth, opts));
+  const errs = r.diagrams.map((d, i) =>
+    d.shot ? Math.hypot(d.shot.x - truth[i].x, d.shot.y - truth[i].y).toFixed(2) + (d.shot.confidence === 'high' ? ' ' : '?') : 'miss ');
+  lines.push(`${name.padEnd(36)} ${errs.join(' ')}`);
+  out.textContent = lines.join('\n');
+}
+const blank = await scanCard('../reference/blank-card.jpg');
+lines.push(`${'blank reference card'.padEnd(36)} ${blank.diagrams.filter((d) => d.shot).length} shots found`);
+out.textContent = lines.join('\n') + '\ndone';
+</script>
+</body>
