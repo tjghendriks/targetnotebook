@@ -8,7 +8,7 @@ import { scanCard, ScanError } from './detect.js';
 import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js';
 
 // Shown in Settings so it is clear which release a device is running. Keep in step with sw.js.
-const VERSION = '2026.10.11-5';
+const VERSION = '2026.10.11-6';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -109,38 +109,44 @@ function statsBlock(card, shots) {
     </div>`;
 }
 
-// A firing-order chooser: method, mirror option, and tap-to-number for a custom
-// order. Calls onChange with a new spec whenever a complete order is chosen.
+// A firing-order chooser: a picture of the card for each method (tap to
+// choose), a mirror option, and tap-to-number for a custom order. Calls
+// onChange with a new spec whenever a complete order is chosen.
 function mountOrderPicker(el, card, spec, onChange) {
   spec = { method: 'clockwise', mirror: false, custom: null, ...spec };
   const count = card.diagrams.length;
   let taps = null; // partly entered custom order
   const draw = () => {
     const custom = spec.method === 'custom';
-    const order = taps ?? resolveOrder(card, spec);
+    const tile = (key, label, order) => `
+      <button class="order-tile ${spec.method === key ? 'on' : ''}" data-method="${key}" aria-pressed="${spec.method === key}">
+        ${orderSvg(card, order)}<span>${label}</span>
+      </button>`;
+    const customOrder = isOrder(spec.custom, count) ? spec.custom : resolveOrder(card, spec);
     el.innerHTML = `
-      <div class="row">
-        <label class="field">Order<select data-o="method">
-          ${Object.entries(card.orders).map(([k, m]) => `<option value="${k}" ${spec.method === k ? 'selected' : ''}>${m.label}</option>`).join('')}
-          <option value="custom" ${custom ? 'selected' : ''}>Custom</option>
-        </select></label>
-        ${custom
-          ? '<button data-o="clear">Clear and re-enter</button>'
-          : `<label class="check"><input type="checkbox" data-o="mirror" ${spec.mirror ? 'checked' : ''}> Mirror image (left-handed)</label>`}
+      <div class="order-tiles">
+        ${Object.entries(card.orders).map(([key, m]) => tile(key, m.label, resolveOrder(card, { method: key, mirror: spec.mirror }))).join('')}
+        ${tile('custom', 'Custom', customOrder)}
       </div>
-      ${orderSvg(card, order)}
-      <p class="muted">${taps
-        ? `Tap the diagrams in the order they are shot. ${count - taps.length} to go.`
-        : custom ? 'Custom order. Use Clear and re-enter to change it.' : 'Numbers show the order the diagrams are shot.'}</p>`;
-    el.querySelector('[data-o=method]').addEventListener('change', (e) => {
-      const method = e.target.value;
-      // Start a custom order from whatever was showing, so it is valid straight away.
+      ${custom ? `
+        <div class="order-entry">
+          ${orderSvg(card, taps ?? customOrder)}
+          <p class="muted">${taps
+            ? `Tap the aiming marks in the order they are shot. ${count - taps.length} to go.`
+            : 'Your custom order. To change it, clear it and tap the aiming marks in the order they are shot.'}</p>
+          <button data-o="clear">Clear and re-enter</button>
+        </div>`
+        : `<label class="check"><input type="checkbox" data-o="mirror" ${spec.mirror ? 'checked' : ''}> Mirror image (left-handed)</label>`}`;
+    el.querySelectorAll('.order-tile').forEach((b) => b.addEventListener('click', () => {
+      const method = b.dataset.method;
+      if (method === spec.method) return;
+      // Start a custom order from whatever was chosen, so it is valid straight away.
       const seed = method === 'custom' && !isOrder(spec.custom, count) ? resolveOrder(card, spec) : spec.custom;
       spec = { ...spec, method, custom: seed };
       taps = null;
       onChange(spec);
       draw();
-    });
+    }));
     el.querySelector('[data-o=mirror]')?.addEventListener('change', (e) => {
       spec = { ...spec, mirror: e.target.checked };
       onChange(spec);
@@ -151,7 +157,7 @@ function mountOrderPicker(el, card, spec, onChange) {
       draw();
     });
     if (taps) {
-      el.querySelectorAll('.op').forEach((g) => g.addEventListener('click', () => {
+      el.querySelectorAll('.order-entry .op').forEach((g) => g.addEventListener('click', () => {
         const p = Number(g.dataset.p);
         if (taps.includes(p)) return;
         taps.push(p);

@@ -76,23 +76,23 @@ export function groupSvg(card, shots, stats, settings) {
   </svg>`;
 }
 
-// The card layout with each diagram showing when it is shot. `order` may be
-// partly filled while a custom order is being tapped in.
+// The card, in its own colours, with each aiming mark showing when it is
+// shot. `order` may be partly filled while a custom order is being tapped in.
 export function orderSvg(card, order) {
   const W = card.width;
   const H = card.height;
   const at = (p) => card.diagrams[p];
-  const r = card.diagrams.length > 5 ? 27 : 32;
+  const r = card.aimingMarkDia / 2 + 3;
   const path = order.map((p, i) => `${i ? 'L' : 'M'}${at(p).x} ${at(p).y}`).join('');
   const spots = card.diagrams
     .map((d, p) => {
       const k = order.indexOf(p);
       return `<g class="op ${k < 0 ? 'empty' : ''}" data-p="${p}" transform="translate(${d.x} ${d.y})">
-        <circle r="${r}"/><text y="1">${k < 0 ? '' : k + 1}</text></g>`;
+        <circle r="${f(r)}"/><text y="1.5">${k < 0 ? '' : k + 1}</text></g>`;
     })
     .join('');
   return `<svg class="order-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-    <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" rx="14" class="order-bg"/>
+    <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" rx="10" fill="${PAPER}"/>
     <path d="${path}" class="order-path"/>${spots}
   </svg>`;
 }

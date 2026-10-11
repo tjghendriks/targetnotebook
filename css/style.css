@@ -229,15 +229,26 @@ th { color: var(--muted); font-size: 12px; font-weight: 600; }
 .ed .hint { color: #a9b7cb; font-size: 13px; margin: 10px 0 0; }
 
 /* Shot order */
-.order-svg { display: block; width: 100%; max-width: 440px; height: auto; margin: 12px auto 4px; }
-.order-bg { fill: var(--tile); }
-.order-path { fill: none; stroke: #9dbdf0; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
-.op circle { fill: var(--blue); }
-.op text { font: 700 26px sans-serif; fill: #fff; text-anchor: middle; dominant-baseline: central; }
-.op.empty circle { fill: var(--panel); stroke: var(--line); stroke-width: 2; stroke-dasharray: 5 4; cursor: pointer; }
+.order-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.order-tile {
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  min-height: 0; padding: 8px 8px 10px;
+  background: var(--panel); border: 2px solid var(--line); border-radius: var(--radius-sm);
+  color: var(--ink); font-size: 14px;
+}
+.order-tile.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue-deep); }
+.order-tile .op { pointer-events: none; }
+.order-svg { display: block; width: 100%; height: auto; border-radius: 8px; }
+.order-entry { margin-top: 14px; }
+.order-entry .order-svg { max-width: 460px; margin: 0 auto 4px; }
+.order-entry button { width: 100%; }
+.order-path { fill: none; stroke: #1f1b19; stroke-opacity: 0.4; stroke-width: 3.5; stroke-linejoin: round; stroke-linecap: round; }
+.op circle { fill: #1f1b19; }
+.op text { font: 700 30px sans-serif; fill: #f4e3c8; text-anchor: middle; dominant-baseline: central; }
+.op.empty circle { fill: rgba(31, 27, 25, 0.08); stroke: #1f1b19; stroke-width: 2; stroke-dasharray: 6 5; cursor: pointer; }
 .bar-fill { fill: var(--blue); }
 label.check {
-  display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 14px; align-self: flex-end;
+  display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 14px; margin-top: 12px;
   background: var(--tile); border: 1px solid var(--line); border-radius: var(--radius-sm);
   font-size: 14px; font-weight: 600; color: var(--ink); cursor: pointer;
 }
