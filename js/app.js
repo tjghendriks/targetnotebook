@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js';
-import * as store from './store.js';
-import { scanCard, ScanError } from './detect.js';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js';
+} from './model.js?v=2026.10.11-10';
+import * as store from './store.js?v=2026.10.11-10';
+import { scanCard, ScanError } from './detect.js?v=2026.10.11-10';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js?v=2026.10.11-10';
 
-// Shown in Settings so it is clear which release a device is running. Keep in step with sw.js.
-const VERSION = '2026.10.11-7';
+// Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
+const VERSION = '2026.10.11-10';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -260,6 +260,7 @@ function renderCard() {
   }
   if (toCheck) notes.push(`${toCheck} shot${toCheck === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.`);
   view.innerHTML = `
+    <a class="back" href="#/">‹ All cards</a>
     <div class="panel">
       ${cardSvg(rec, card, settings, order)}
       ${missing
@@ -270,10 +271,6 @@ function renderCard() {
       <div class="row">
         <label class="field">Date<input id="f-date" type="date" value="${esc(rec.date)}"></label>
         <label class="field">Competition / session<input id="f-name" type="text" maxlength="80" placeholder="e.g. Winter league round 3" value="${esc(rec.name)}"></label>
-      </div>
-      <div class="row" style="margin-top:12px">
-        <button id="save" class="primary" ${dirty ? '' : 'disabled'}>${rec.isNew ? 'Save card' : dirty ? 'Save changes' : 'Saved'}</button>
-        <button id="del" class="danger">${rec.isNew ? 'Discard' : 'Delete card'}</button>
       </div>
     </div>
     <h2>Shots</h2>
@@ -295,6 +292,10 @@ function renderCard() {
     <div class="row">
       ${card.symmetric ? '<button id="flip">Card was upside down</button>' : ''}
       <button id="csv">Export CSV</button>
+    </div>
+    <div class="actions">
+      <button id="save" class="primary" ${dirty ? '' : 'disabled'}>${rec.isNew ? 'Save card' : dirty ? 'Save changes' : 'Saved'}</button>
+      <button id="del" class="danger">${rec.isNew ? 'Discard' : 'Delete card'}</button>
     </div>`;
 
   view.querySelectorAll('.dg').forEach((g) => g.addEventListener('click', () => openEditor(Number(g.dataset.d))));
@@ -393,10 +394,11 @@ function openEditor(diagram) {
     const others = Array.from({ length: per }, (_, j) => j).filter((j) => j !== active && isShot(current.shots[slot(j)]));
     el.innerHTML = `<div class="ed">
       <div class="ed-head">
-        <div><small>${per > 1 ? `Diagram ${step + 1} of ${order.length}` : `Shot ${step + 1} of ${order.length}`}</small>
-          <span class="ed-score" id="ed-score">${shot ? scoreShot(shot.x, shot.y, card, settings) : miss ? 0 : '?'}</span></div>
-        <div style="text-align:right"><small id="ed-pos">${shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm` : miss ? 'Confirmed: no shot here' : 'No shot detected'}</small>
+        <span class="ed-score" id="ed-score">${shot ? scoreShot(shot.x, shot.y, card, settings) : miss ? 0 : '?'}</span>
+        <div class="ed-info"><small>${per > 1 ? `Diagram ${step + 1} of ${order.length}` : `Shot ${step + 1} of ${order.length}`}</small>
+          <small id="ed-pos">${shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm` : miss ? 'Confirmed: no shot here' : 'No shot detected'}</small>
           <small>${shot ? (shot.source === 'auto' ? `Detected${shot.confidence === 'high' ? '' : ', please check'}` : 'Placed by hand') : miss ? 'Tap the hole if there is one after all' : 'Tap the hole, or confirm there is none'}</small></div>
+        <button id="ed-done" class="primary">Done</button>
       </div>
       ${per > 1 ? `<div class="row pickers">${Array.from({ length: per }, (_, j) => {
         const s = current.shots[slot(j)];
@@ -432,7 +434,6 @@ function openEditor(diagram) {
       <div class="row">
         <button id="ed-prev" ${step ? '' : 'disabled'}>‹ Previous</button>
         <button id="ed-next" ${step < order.length - 1 ? '' : 'disabled'}>Next ›</button>
-        <button id="ed-done" class="primary">Done</button>
       </div>
     </div>`;
     wire();
@@ -626,6 +627,8 @@ async function showAnalysis() {
 
 async function showSettings() {
   const state = await store.persistence();
+  const used = await store.usage();
+  const size = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(n ? 1 : 0, Math.round(n / 1e3))} KB`);
   const storageNote = {
     persistent: 'Storage is marked persistent, so the browser will not clear it automatically.',
     'best-effort': 'The browser may clear this data if the device runs low on space or the app goes unused. Add the app to your home screen and keep a backup.',
@@ -650,8 +653,16 @@ async function showSettings() {
       <div id="s-order-${c.id}"></div>
       <p class="muted">Used for new scans${c.id === DEFAULT_TYPE ? ', and for saved cards that have no order of their own' : ''}. It can be changed on any individual card.</p>
     </div>`).join('')}
-    <h2>Backup</h2>
+    <h2>Storage and backup</h2>
     <div class="panel">
+      <div class="stats">
+        <div class="stat"><b>${size(used.bytes)}</b><span>Used on this device</span></div>
+        <div class="stat"><b>${used.cards}</b><span>Saved card${used.cards === 1 ? '' : 's'}</span></div>
+        ${used.quota ? `<div class="stat"><b>${size(used.quota)}</b><span>Space the browser allows</span></div>` : ''}
+      </div>
+      <p class="muted">${used.cards
+        ? `About ${size(used.bytes / used.cards)} per card. The diagram photos kept for checking shots make up ${size(used.photoBytes)} of the total.`
+        : 'Each saved card takes roughly half a megabyte, nearly all of it the diagram photos kept for checking shots.'}</p>
       <p class="muted">Everything is stored only in this browser on this device. ${storageNote}</p>
       <div class="row">
         <button id="x-full">Backup with photos</button>
@@ -716,12 +727,26 @@ async function route() {
   }
   $('#editor').hidden = true;
   const tab = hash.startsWith('#/analysis') ? 'analysis' : hash.startsWith('#/settings') ? 'settings' : 'cards';
+  // A card has its own bottom bar (save and delete) in place of the tabs.
+  document.body.classList.toggle('card-open', hash.startsWith('#/card/'));
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   window.scrollTo(0, 0);
-  if (hash.startsWith('#/card/')) await showCard(decodeURIComponent(hash.slice(7)));
-  else if (tab === 'analysis') await showAnalysis();
-  else if (tab === 'settings') await showSettings();
-  else await showCards();
+  try {
+    if (hash.startsWith('#/card/')) await showCard(decodeURIComponent(hash.slice(7)));
+    else if (tab === 'analysis') await showAnalysis();
+    else if (tab === 'settings') await showSettings();
+    else await showCards();
+  } catch (err) {
+    // Say so rather than leave the previous page showing under the new tab.
+    console.error(err);
+    view.innerHTML = `<div class="panel">
+      <p><b>This page could not be shown.</b></p>
+      <p class="muted">Reloading usually fixes it. If it keeps happening, the message below says what went wrong.</p>
+      <p class="muted">${esc(err?.message ?? err)} (version ${VERSION})</p>
+      <button class="primary" id="reload">Reload</button>
+    </div>`;
+    $('#reload').addEventListener('click', () => location.reload());
+  }
 }
 
 window.addEventListener('hashchange', route);
