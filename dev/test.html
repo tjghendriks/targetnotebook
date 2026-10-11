@@ -2,34 +2,71 @@
 <meta charset="utf-8">
 <title>Target Notebook detector check</title>
 <body style="font:14px/1.5 monospace;padding:16px">
-<p>Scans synthetic cards with shots at known positions and reports the position error (mm) per diagram.
-The blank reference card should report no shots.</p>
+<p>Scans synthetic cards with shots at known positions and reports the position error (mm) per shot
+(? = flagged for checking). Blank reference cards should report no shots.</p>
 <pre id="out">running…</pre>
 <script type="module">
 import { scanCard } from '../js/detect.js';
+import { CARDS } from '../js/model.js';
 import { drawCard } from './synth.js';
 
-const truth = [
+const out = document.getElementById('out');
+const lines = [];
+const say = (line) => { lines.push(line); out.textContent = lines.join('\n'); };
+
+async function run(name, card, truth, opts) {
+  try {
+    const r = await scanCard(drawCard(card, truth, opts));
+    if (r.type !== card.id) return say(`${name.padEnd(40)} WRONG CARD TYPE ${r.type}`);
+    const per = card.shotsPerDiagram;
+    const errs = r.diagrams.map((d, i) => {
+      // The two shots on a diagram are not ordered, so match them up either way round.
+      const want = truth.slice(i * per, i * per + per);
+      const got = d.shots;
+      const cost = (a, b) => (a && b ? Math.hypot(a.x - b.x, a.y - b.y) : a || b ? 99 : 0);
+      const ways = per === 1 ? [[0]] : [[0, 1], [1, 0]];
+      const best = ways.map((w) => w.map((j, k) => cost(got[j], want[k])))
+        .sort((a, b) => Math.max(...a) - Math.max(...b))[0];
+      const flag = got.some((s) => s && s.confidence !== 'high') ? '?' : ' ';
+      return best.map((e) => (e === 99 ? 'miss' : e.toFixed(2))).join('/') + flag;
+    });
+    say(`${name.padEnd(40)} ${errs.join(' ')}`);
+  } catch (err) {
+    say(`${name.padEnd(40)} FAILED: ${err.message}`);
+  }
+}
+
+const ten = [
   { x: 0.4, y: -0.3 }, { x: 3.1, y: 2.2 }, { x: -6.5, y: 1 }, { x: 0, y: 11.9 }, { x: 19.3, y: 0.2 },
   { x: -17, y: -17.5 }, { x: 9, y: -24 }, { x: -1.2, y: -2.9 }, { x: 27, y: 14 }, { x: 12, y: -0.1 },
 ];
-const cases = {
-  'white backing, square on': {},
-  'white backing, rotated + sheared': { rotate: 7, shear: 0.06, pxPerMm: 6 },
-  'grey backing': { backing: '#8a8680', rotate: -3 },
-  'dark backing (expected to struggle)': { backing: '#3a3632' },
-};
-const out = document.getElementById('out');
-const lines = [];
-for (const [name, opts] of Object.entries(cases)) {
-  const r = await scanCard(drawCard(truth, opts));
-  const errs = r.diagrams.map((d, i) =>
-    d.shot ? Math.hypot(d.shot.x - truth[i].x, d.shot.y - truth[i].y).toFixed(2) + (d.shot.confidence === 'high' ? ' ' : '?') : 'miss ');
-  lines.push(`${name.padEnd(36)} ${errs.join(' ')}`);
-  out.textContent = lines.join('\n');
+const bm = CARDS['2510BM'];
+await run('2510BM white backing', bm, ten, {});
+await run('2510BM rotated + sheared', bm, ten, { rotate: 7, shear: 0.06, pxPerMm: 6 });
+await run('2510BM grey backing', bm, ten, { backing: '#8a8680', rotate: -3 });
+
+// Pairs: well apart, touching, overlapping, nearly one hole, and wide.
+const pairs = [
+  { x: -6, y: 2 }, { x: 7, y: -3 },
+  { x: -2.6, y: 0.5 }, { x: 2.6, y: -0.5 },
+  { x: -1.5, y: 1 }, { x: 1.5, y: -1.2 },
+  { x: 7.5, y: 0.4 }, { x: 8.6, y: 1.9 },
+  { x: -20, y: 14 }, { x: 3, y: -30 },
+];
+const cs = CARDS['2505CS'];
+await run('2505CS white backing', cs, pairs, {});
+await run('2505CS rotated + sheared', cs, pairs, { rotate: -5, shear: 0.05, pxPerMm: 6 });
+await run('2505CS upside down', cs, pairs, { rotate: 180 });
+await run('2505CS grey backing', cs, pairs, { backing: '#8a8680', rotate: 3 });
+
+for (const [file, type] of [['blank-card.jpg', '2510BM'], ['blank-2505cs.webp', '2505CS']]) {
+  try {
+    const r = await scanCard(`../reference/${file}`);
+    say(`${('blank ' + type).padEnd(40)} read as ${r.type}, ${r.diagrams.flatMap((d) => d.shots).filter(Boolean).length} shots found`);
+  } catch (err) {
+    say(`${('blank ' + type).padEnd(40)} FAILED: ${err.message}`);
+  }
 }
-const blank = await scanCard('../reference/blank-card.jpg');
-lines.push(`${'blank reference card'.padEnd(36)} ${blank.diagrams.filter((d) => d.shot).length} shots found`);
-out.textContent = lines.join('\n') + '\ndone';
+say('done');
 </script>
 </body>

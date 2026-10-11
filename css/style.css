@@ -156,12 +156,13 @@ label.field input, label.field select {
 .card-svg, .group-svg, .trend-svg { display: block; width: 100%; height: auto; border-radius: var(--radius-sm); }
 .group-svg { max-width: 420px; margin: 0 auto; }
 .card-svg .dg { cursor: pointer; }
-.numeral { font: 2.6px Arial, sans-serif; fill: #e7caa2; text-anchor: middle; dominant-baseline: central; }
+.numeral { font: 2.6px Arial, sans-serif; text-anchor: middle; dominant-baseline: central; }
 .shot { fill: rgba(58, 140, 255, 0.78); stroke: #fff; stroke-width: 0.4; }
 .shot.unsure { fill: rgba(255, 255, 255, 0.55); stroke-dasharray: 1 0.7; }
 .shot.faint { fill: rgba(58, 140, 255, 0.45); stroke-width: 0.2; }
 .dnum { font: 600 5px sans-serif; fill: #6b5a43; text-anchor: middle; }
 .dscore { font: 700 11px sans-serif; fill: #16202e; text-anchor: middle; }
+.dscore.pair { font-size: 9px; }
 .dscore.check { fill: #0f3f91; text-decoration: underline; }
 .mean-ring { fill: none; stroke: #fff; stroke-width: 0.3; stroke-dasharray: 1.2 0.8; }
 .mpi { stroke: #fff; stroke-width: 0.7; fill: none; }
@@ -218,10 +219,12 @@ th { color: var(--muted); font-size: 12px; font-weight: 600; }
 .zoomer img, .zoomer svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
 .ov-ring { fill: none; stroke: #a8d8ff; stroke-width: 0.12; opacity: 0.9; }
 .ov-gauge { fill: rgba(47, 139, 255, 0.16); stroke: #2f8bff; stroke-width: 0.26; }
+.ov-other { fill: none; stroke: #cfe3ff; stroke-width: 0.2; stroke-dasharray: 0.8 0.6; }
 .ov-cross { stroke: #2f8bff; stroke-width: 0.16; }
 .ed button { background: #1c2a40; border-color: #32435e; color: #fff; }
 .ed button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
 .ed .row { margin-top: 10px; }
+.ed .pickers { margin: 0 0 10px; }
 .nudge { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
 .ed .hint { color: #a9b7cb; font-size: 13px; margin: 10px 0 0; }
 

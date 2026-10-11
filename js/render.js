@@ -1,61 +1,68 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { CARD, scoreShot } from './model.js';
+import { scoreShot } from './model.js';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';
-const MARK_R = CARD.aimingMarkDia / 2;
 const f = (v) => (Math.round(v * 100) / 100).toString();
 
-export function diagramMarkup() {
-  const rings = CARD.rings
-    .map((r) => `<circle r="${f(r.dia / 2 - 0.12)}" fill="none" stroke="${PAPER}" stroke-width="0.24"/>`)
+// Radius of everything printed for one diagram (rings can lie outside the black).
+export const diagramReach = (card) => Math.max(card.aimingMarkDia, ...card.rings.map((r) => r.dia)) / 2;
+
+export function diagramMarkup(card) {
+  const markR = card.aimingMarkDia / 2;
+  const rings = card.rings
+    .filter((r) => Math.abs(r.dia / 2 - markR) > 0.2)
+    .map((r) => `<circle r="${f(r.dia / 2 - 0.12)}" fill="none" stroke="${r.dia / 2 < markR ? PAPER : INK}" stroke-width="0.24"/>`)
     .join('');
-  const numerals = CARD.numerals
-    .flatMap((n) =>
-      [[0, -1], [0, 1], [-1, 0], [1, 0]].map(
-        ([ux, uy]) => `<text x="${f(ux * n.r)}" y="${f(uy * n.r)}" class="numeral">${n.text}</text>`
-      )
-    )
+  const numerals = card.numerals
+    .flatMap((n) => n.at.map(([ux, uy]) =>
+      `<text x="${f(ux * n.r)}" y="${f(uy * n.r)}" class="numeral" fill="${n.r < markR ? PAPER : INK}">${n.text}</text>`))
     .join('');
-  return `<circle r="${MARK_R}" fill="${INK}"/>${rings}${numerals}<circle r="0.35" fill="${PAPER}"/>`;
+  const dot = card.centreDot ? `<circle r="0.35" fill="${PAPER}"/>` : '';
+  return `<circle r="${markR}" fill="${INK}"/>${rings}${numerals}${dot}`;
 }
+
+const unsure = (shot) => shot.source === 'auto' && shot.confidence !== 'high';
 
 export function shotMarkup(shot, settings, cls = '') {
-  const unsure = shot.source === 'auto' && shot.confidence !== 'high';
-  return `<circle class="shot ${unsure ? 'unsure' : ''} ${cls}" cx="${f(shot.x)}" cy="${f(-shot.y)}" r="${f(settings.gaugeDia / 2)}"/>`;
+  return `<circle class="shot ${unsure(shot) ? 'unsure' : ''} ${cls}" cx="${f(shot.x)}" cy="${f(-shot.y)}" r="${f(settings.gaugeDia / 2)}"/>`;
 }
 
-// `order` is the firing order; each diagram is labelled with its shot number.
-export function cardSvg(card, settings, order) {
-  const W = CARD.width;
-  const H = CARD.height;
-  const diagrams = CARD.diagrams
+// `order` is the firing order of the diagrams; each is labelled with its place in it.
+export function cardSvg(rec, card, settings, order) {
+  const W = card.width;
+  const H = card.height;
+  const per = card.shotsPerDiagram;
+  const reach = diagramReach(card);
+  const diagrams = card.diagrams
     .map((d, i) => {
-      const shot = card.shots[i];
-      const score = shot ? scoreShot(shot.x, shot.y, settings) : null;
-      const unsure = shot && shot.source === 'auto' && shot.confidence !== 'high';
-      return `<g class="dg" data-n="${d.n}" transform="translate(${d.x} ${d.y})" role="button" aria-label="Diagram ${d.n}">
-        <rect x="-36" y="-34" width="72" height="68" fill="transparent"/>
-        ${diagramMarkup()}
-        ${shot ? shotMarkup(shot, settings) : ''}
-        <text class="dnum" x="-27" y="-22">${order.indexOf(i) + 1}</text>
-        <text class="dscore ${!shot || unsure ? 'check' : ''}" x="27" y="-19">${shot ? score : '?'}</text>
+      const shots = rec.shots.slice(i * per, i * per + per);
+      const placed = shots.filter(Boolean);
+      const scores = placed.map((s) => scoreShot(s.x, s.y, card, settings));
+      const check = placed.length < per || placed.some(unsure);
+      const label = placed.length ? scores.join(' ') + (placed.length < per ? ' ?' : '') : '?';
+      return `<g class="dg" data-d="${i}" transform="translate(${d.x} ${d.y})" role="button" aria-label="Diagram ${order.indexOf(i) + 1}">
+        <rect x="${-reach - 8}" y="${-reach - 6}" width="${2 * reach + 16}" height="${2 * reach + 12}" fill="transparent"/>
+        ${diagramMarkup(card)}
+        ${placed.map((s) => shotMarkup(s, settings)).join('')}
+        <text class="dnum" x="${f(-reach * 0.92)}" y="${f(-reach * 0.8)}">${order.indexOf(i) + 1}</text>
+        <text class="dscore ${check ? 'check' : ''} ${per > 1 ? 'pair' : ''}" x="${f(reach * 0.95)}" y="${f(-reach * 0.76)}">${label}</text>
       </g>`;
     })
     .join('');
   return `<svg class="card-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
     <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="${PAPER}"/>
-    <rect x="${-CARD.trim.width / 2}" y="${-CARD.trim.height / 2}" width="${CARD.trim.width}" height="${CARD.trim.height}"
-      fill="none" stroke="${INK}" stroke-width="0.3" stroke-dasharray="0.8 0.8"/>
+    ${card.trim ? `<rect x="${-card.trim.width / 2}" y="${-card.trim.height / 2}" width="${card.trim.width}" height="${card.trim.height}"
+      fill="none" stroke="${INK}" stroke-width="0.3" stroke-dasharray="0.8 0.8"/>` : ''}
     ${diagrams}
   </svg>`;
 }
 
 // All shots overlaid on one diagram, with the mean point of impact.
-export function groupSvg(shots, stats, settings) {
-  const reach = Math.max(30, ...shots.map((s) => Math.hypot(s.x, s.y) + 5));
+export function groupSvg(card, shots, stats, settings) {
+  const reach = Math.max(diagramReach(card) + 4, ...shots.map((s) => Math.hypot(s.x, s.y) + 5));
   const marks = shots.map((s) => shotMarkup({ ...s, source: 'manual' }, settings, 'faint')).join('');
   const mpi = stats
     ? `<circle cx="${f(stats.mx)}" cy="${f(-stats.my)}" r="${f(stats.meanRadius)}" class="mean-ring"/>
@@ -63,22 +70,23 @@ export function groupSvg(shots, stats, settings) {
     : '';
   return `<svg class="group-svg" viewBox="${-reach} ${-reach} ${2 * reach} ${2 * reach}" xmlns="http://www.w3.org/2000/svg">
     <rect x="${-reach}" y="${-reach}" width="${2 * reach}" height="${2 * reach}" fill="${PAPER}"/>
-    ${diagramMarkup()}${marks}${mpi}
+    ${diagramMarkup(card)}${marks}${mpi}
   </svg>`;
 }
 
 // The card layout with each diagram showing when it is shot. `order` may be
 // partly filled while a custom order is being tapped in.
-export function orderSvg(order) {
-  const W = CARD.width;
-  const H = CARD.height;
-  const at = (p) => CARD.diagrams[p];
+export function orderSvg(card, order) {
+  const W = card.width;
+  const H = card.height;
+  const at = (p) => card.diagrams[p];
+  const r = card.diagrams.length > 5 ? 27 : 32;
   const path = order.map((p, i) => `${i ? 'L' : 'M'}${at(p).x} ${at(p).y}`).join('');
-  const spots = CARD.diagrams
+  const spots = card.diagrams
     .map((d, p) => {
       const k = order.indexOf(p);
       return `<g class="op ${k < 0 ? 'empty' : ''}" data-p="${p}" transform="translate(${d.x} ${d.y})">
-        <circle r="27"/><text y="1">${k < 0 ? '' : k + 1}</text></g>`;
+        <circle r="${r}"/><text y="1">${k < 0 ? '' : k + 1}</text></g>`;
     })
     .join('');
   return `<svg class="order-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
@@ -87,7 +95,7 @@ export function orderSvg(order) {
   </svg>`;
 }
 
-// Average score for each shot number (1st shot fired, 2nd, ...). null = no data.
+// Average score at each step of the firing order. null = no data.
 export function shotNumberSvg(values) {
   const W = 320;
   const H = 130;

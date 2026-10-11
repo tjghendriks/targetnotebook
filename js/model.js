@@ -1,95 +1,163 @@
-// Card geometry, scoring and group statistics for the NSRA 2510 B.M./89-18 card.
+// Card geometry, scoring and group statistics for the supported NSRA 25 yard cards.
 // All dimensions are millimetres. Card coordinates: origin at the card centre,
 // x to the right, y down. Shot coordinates: origin at the diagram centre,
 // x to the right, y UP (so a positive y is a high shot).
+//
+// A saved card holds one entry per shot in `shots`, grouped by diagram:
+// shots for diagram d are at d * shotsPerDiagram ... + shotsPerDiagram - 1.
 
+const CROSS = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+const SIDES = [[-1, 0], [1, 0]];
 const COLS = [-127.5, -42.5, 42.5, 127.5];
 const ROW = 73.3;
 
-export const CARD = {
-  id: '2510BM/89-18',
-  name: 'NSRA British Match 1989, 25 yards, 10 bull',
-  distanceMm: 25 * 914.4,
-  width: 352,
-  height: 232,
-  trim: { width: 312, height: 208 },
-  aimingMarkDia: 51.4,
-  // Scoring ring diameters, to the outer edge of the printed line (checked
-  // against the blank card). A shot scores a ring's value when it gauges inside
-  // it; anything outside the 6 ring scores 0.
-  rings: [
-    { score: 10, dia: 12.92 },
-    { score: 9, dia: 20.23 },
-    { score: 8, dia: 27.55 },
-    { score: 7, dia: 34.86 },
-    { score: 6, dia: 42.18 },
-  ],
-  // Printed numerals (value, radius of the band they sit in).
-  numerals: [
-    { text: '8', r: 11.95 },
-    { text: '6', r: 19.26 },
-  ],
-  // Diagrams numbered left to right, top to bottom.
-  diagrams: [
-    ...COLS.map((x, i) => ({ n: i + 1, x, y: -ROW })),
-    { n: 5, x: -85, y: 0 },
-    { n: 6, x: 85, y: 0 },
-    ...COLS.map((x, i) => ({ n: i + 7, x, y: ROW })),
-  ],
+export const CARDS = {
+  '2510BM': {
+    id: '2510BM',
+    label: '2510BM/89-18',
+    name: 'British Match 1989, 10 bull',
+    width: 352,
+    height: 232,
+    trim: { width: 312, height: 208 },
+    aimingMarkDia: 51.4,
+    centreDot: true,
+    // Scoring ring diameters, to the outer edge of the printed line (checked
+    // against the blank card). Anything outside the lowest ring scores 0.
+    rings: [
+      { score: 10, dia: 12.92 },
+      { score: 9, dia: 20.23 },
+      { score: 8, dia: 27.55 },
+      { score: 7, dia: 34.86 },
+      { score: 6, dia: 42.18 },
+    ],
+    // Outward: the whole gauge must lie on or inside the ring.
+    gauging: 'outward',
+    shotsPerDiagram: 1,
+    // Printed numerals: radius of the band they sit in and where around it.
+    numerals: [
+      { text: '8', r: 11.95, at: CROSS },
+      { text: '6', r: 19.26, at: CROSS },
+    ],
+    // Diagrams in reading order, as rows of 4, 2 and 4.
+    rows: [4, 2, 4],
+    diagrams: [
+      ...COLS.map((x) => ({ x, y: -ROW })),
+      { x: -85, y: 0 },
+      { x: 85, y: 0 },
+      ...COLS.map((x) => ({ x, y: ROW })),
+    ],
+    // The layout looks the same upside down; the print at the right-hand end tells which way up it is.
+    symmetric: true,
+    patchMm: 76,
+    searchR: 35,
+    // Firing orders, as diagram indices in the sequence they are shot.
+    orders: {
+      clockwise: { label: 'Clockwise loop', order: [0, 1, 2, 3, 5, 9, 8, 7, 6, 4] },
+      z: { label: 'Z method', order: [0, 1, 4, 6, 7, 8, 9, 5, 2, 3] },
+      rows: { label: 'Rows', order: [0, 1, 2, 3, 5, 4, 6, 7, 8, 9] },
+    },
+    mirror: [3, 2, 1, 0, 5, 4, 9, 8, 7, 6],
+  },
+  '2505CS': {
+    id: '2505CS',
+    label: '2505CS-18',
+    name: 'Cadets and Schools 1971, 5 bull',
+    width: 308,
+    height: 202,
+    trim: null,
+    // The black is 1.84 in (46.8 mm) at 25 yards and is the 7 ring. The other
+    // rings were measured off a photo of a blank card relative to the black,
+    // and fit an even 12.6 mm step in diameter to within 0.3 mm.
+    aimingMarkDia: 46.8,
+    rings: [
+      { score: 10, dia: 9.0 },
+      { score: 9, dia: 21.6 },
+      { score: 8, dia: 34.2 },
+      { score: 7, dia: 46.8 },
+      { score: 6, dia: 59.4 },
+      { score: 5, dia: 72.0 },
+    ],
+    // Inward: the gauge need only touch the ring.
+    gauging: 'inward',
+    shotsPerDiagram: 2,
+    numerals: [
+      { text: '9', r: 7.4, at: SIDES },
+      { text: '7', r: 20.2, at: SIDES },
+      { text: '5', r: 32.9, at: SIDES },
+    ],
+    rows: [3, 2],
+    diagrams: [
+      { x: -98.5, y: -41.4 },
+      { x: 0, y: -41.4 },
+      { x: 98.5, y: -41.4 },
+      { x: -50.5, y: 36.6 },
+      { x: 50.5, y: 36.6 },
+    ],
+    symmetric: false,
+    patchMm: 84,
+    searchR: 40,
+    orders: {
+      clockwise: { label: 'Clockwise', order: [0, 1, 2, 4, 3] },
+      rows: { label: 'Rows', order: [0, 1, 2, 3, 4] },
+    },
+    mirror: [2, 1, 0, 4, 3],
+  },
 };
 
-// Firing orders, as diagram indices (0-9, reading order: four across the top,
-// two in the middle, four along the bottom) in the sequence they are shot.
-export const ORDER_METHODS = {
-  clockwise: { label: 'Clockwise loop', order: [0, 1, 2, 3, 5, 9, 8, 7, 6, 4] },
-  z: { label: 'Z method', order: [0, 1, 4, 6, 7, 8, 9, 5, 2, 3] },
-  rows: { label: 'Rows', order: [0, 1, 2, 3, 5, 4, 6, 7, 8, 9] },
-};
-const MIRROR = [3, 2, 1, 0, 5, 4, 9, 8, 7, 6];
+export const DEFAULT_TYPE = '2510BM';
+// Cards saved before other card types existed carry no type.
+export const cardType = (rec) => CARDS[rec?.type] ?? CARDS[DEFAULT_TYPE];
 
-export const isOrder = (a) =>
-  Array.isArray(a) && a.length === 10 && [...a].sort((x, y) => x - y).every((v, i) => v === i);
+export const DISTANCE_MM = 25 * 914.4;
+// One minute of angle at 25 yards, in mm.
+export const MOA_MM = DISTANCE_MM * Math.tan(Math.PI / 180 / 60);
 
-// spec: { method: 'clockwise' | 'z' | 'rows' | 'custom', mirror, custom }
-export function resolveOrder(spec) {
-  if (spec?.method === 'custom' && isOrder(spec.custom)) return [...spec.custom];
-  const base = (ORDER_METHODS[spec?.method] ?? ORDER_METHODS.clockwise).order;
-  return spec?.mirror ? base.map((p) => MIRROR[p]) : [...base];
+export const isOrder = (a, n) =>
+  Array.isArray(a) && a.length === n && [...a].sort((x, y) => x - y).every((v, i) => v === i);
+
+// spec: { method: <key of card.orders> | 'custom', mirror, custom }
+export function resolveOrder(card, spec) {
+  if (spec?.method === 'custom' && isOrder(spec.custom, card.diagrams.length)) return [...spec.custom];
+  const base = (card.orders[spec?.method] ?? card.orders.clockwise).order;
+  return spec?.mirror ? base.map((p) => card.mirror[p]) : [...base];
 }
 
-// A card keeps the order it was scanned with; older cards follow the default.
-export const cardOrder = (card, settings) => resolveOrder(card.orderSpec ?? settings.shotOrder);
-
 export const DEFAULT_SETTINGS = {
-  gauging: 'outward', // 'outward' | 'inward'
   gaugeDia: 5.6,
   clickMoa: 1 / 6,
+  // Default firing order: shotOrder for the 2510BM, shotOrders[type] for other cards.
   shotOrder: { method: 'clockwise', mirror: false, custom: null },
+  shotOrders: {},
 };
 
-// One minute of angle at 25 yards, in mm.
-export const MOA_MM = CARD.distanceMm * Math.tan(Math.PI / 180 / 60);
+export const defaultOrderSpec = (settings, card) =>
+  (card.id === DEFAULT_TYPE ? settings.shotOrder : settings.shotOrders?.[card.id]) ??
+  { method: 'clockwise', mirror: false, custom: null };
+
+// A card keeps the order it was scanned with; older cards follow the default.
+export const cardOrder = (rec, settings) => {
+  const card = cardType(rec);
+  return resolveOrder(card, rec.orderSpec ?? defaultOrderSpec(settings, card));
+};
 
 const EPS = 1e-6;
 
-export function scoreShot(x, y, settings = DEFAULT_SETTINGS) {
+export function scoreShot(x, y, card, settings = DEFAULT_SETTINGS) {
   const d = Math.hypot(x, y);
   const g = settings.gaugeDia / 2;
-  // Outward gauging: the whole gauge must lie on or inside the ring.
-  // Inward gauging: the gauge need only touch the ring.
-  const reach = settings.gauging === 'inward' ? d - g : d + g;
-  for (const ring of CARD.rings) {
+  const reach = card.gauging === 'inward' ? d - g : d + g;
+  for (const ring of card.rings) {
     if (reach <= ring.dia / 2 + EPS) return ring.score;
   }
   return 0;
 }
 
-export function cardShots(card) {
-  return card.shots.filter((s) => s && Number.isFinite(s.x) && Number.isFinite(s.y));
-}
+export const isShot = (s) => !!s && Number.isFinite(s.x) && Number.isFinite(s.y);
+export const cardShots = (rec) => rec.shots.filter(isShot);
 
-export function cardTotal(card, settings) {
-  return cardShots(card).reduce((t, s) => t + scoreShot(s.x, s.y, settings), 0);
+export function cardTotal(rec, settings) {
+  const card = cardType(rec);
+  return cardShots(rec).reduce((t, s) => t + scoreShot(s.x, s.y, card, settings), 0);
 }
 
 export function groupStats(shots) {

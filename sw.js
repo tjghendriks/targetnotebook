@@ -1,5 +1,5 @@
 // Offline support: serve from the network when there is one, otherwise from the cache.
-const CACHE = 'targetnotebook-v2';
+const CACHE = 'targetnotebook-v3';
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
   'js/app.js', 'js/model.js', 'js/detect.js', 'js/render.js', 'js/store.js',
