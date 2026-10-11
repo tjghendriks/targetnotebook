@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.11-11';
-import * as store from './store.js?v=2026.10.11-11';
-import { scanCard, ScanError } from './detect.js?v=2026.10.11-11';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.11-11';
+} from './model.js?v=2026.10.11-13';
+import * as store from './store.js?v=2026.10.11-13';
+import { scanCard, ScanError } from './detect.js?v=2026.10.11-13';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.11-13';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.11-11';
+const VERSION = '2026.10.11-13';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -668,18 +668,6 @@ async function showSettings() {
     unsupported: 'This browser cannot guarantee long-term storage. Keep a backup.',
   }[state];
   view.innerHTML = `
-    <h2>Scoring</h2>
-    <div class="panel">
-      <label class="field">Gauge diameter (mm)<input id="s-gauge" type="number" step="0.01" min="4" max="7" value="${settings.gaugeDia}"></label>
-      <p class="muted">${Object.values(CARDS).map((c) => `${esc(c.label)} cards are gauged ${c.gauging}`).join('; ')}.
-      Outward means the whole gauge must be on or inside a ring to score it; inward means the gauge need only touch the ring.
-      Scores are always worked out from the stored shot positions, so changing the gauge re-scores every saved card.</p>
-    </div>
-    <h2>Sights</h2>
-    <div class="panel">
-      <label class="field">Clicks per minute of angle<input id="s-clicks" type="number" step="1" min="1" max="20" value="${Math.round(1 / settings.clickMoa)}"></label>
-      <p class="muted">One click moves the shot ${(settings.clickMoa * MOA_MM).toFixed(2)} mm at 25 yards.</p>
-    </div>
     ${Object.values(CARDS).map((c) => `
     <h2>Default shot order, ${esc(c.label)}</h2>
     <div class="panel">
@@ -703,6 +691,22 @@ async function showSettings() {
         <button id="x-csv">All shots as CSV</button>
         <label class="btn">Restore backup<input id="x-import" type="file" accept="application/json,.json" hidden></label>
       </div>
+    </div>
+    <div class="advanced">
+      <h2>Advanced</h2>
+      <p class="muted">Leave these alone unless you know what you're doing.</p>
+    </div>
+    <h3>Scoring</h3>
+    <div class="panel">
+      <label class="field">Gauge diameter (mm)<input id="s-gauge" type="number" step="0.01" min="4" max="7" value="${settings.gaugeDia}"></label>
+      <p class="muted">${Object.values(CARDS).map((c) => `${esc(c.label)} cards are gauged ${c.gauging}`).join('; ')}.
+      Outward means the whole gauge must be on or inside a ring to score it; inward means the gauge need only touch the ring.
+      Scores are always worked out from the stored shot positions, so changing the gauge re-scores every saved card.</p>
+    </div>
+    <h3>Sights</h3>
+    <div class="panel">
+      <label class="field">Clicks per minute of angle<input id="s-clicks" type="number" step="1" min="1" max="20" value="${Math.round(1 / settings.clickMoa)}"></label>
+      <p class="muted">One click moves the shot ${(settings.clickMoa * MOA_MM).toFixed(2)} mm at 25 yards.</p>
     </div>
     <p class="muted" style="text-align:center">Target Notebook version ${VERSION}</p>`;
   const save = async () => {
