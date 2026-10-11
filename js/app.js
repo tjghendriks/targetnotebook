@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.11-10';
-import * as store from './store.js?v=2026.10.11-10';
-import { scanCard, ScanError } from './detect.js?v=2026.10.11-10';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js?v=2026.10.11-10';
+} from './model.js?v=2026.10.11-11';
+import * as store from './store.js?v=2026.10.11-11';
+import { scanCard, ScanError } from './detect.js?v=2026.10.11-11';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.11-11';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.11-10';
+const VERSION = '2026.10.11-11';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -579,6 +579,26 @@ async function showAnalysis() {
       .map((s) => shotValue(s, card, settings));
     return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
   });
+  // Points dropped at each place on the card, whatever order it was shot in.
+  const byPlace = card.diagrams.map((_, d) => {
+    const scores = recs
+      .flatMap((rec) => rec.shots.slice(d * per, d * per + per))
+      .filter((s) => isShot(s) || isMiss(s))
+      .map((s) => shotValue(s, card, settings));
+    return scores.length ? { lost: 10 - mean(scores), shots: scores.length } : null;
+  });
+  const places = byPlace.filter(Boolean);
+  const worst = places.length ? byPlace.indexOf(places.reduce((a, b) => (b.lost > a.lost ? b : a))) : -1;
+  const even = places.length > 0 && places.every((p) => Math.abs(p.lost - places[0].lost) < 0.05);
+  const where = (d) => {
+    let row = 0;
+    let at = d;
+    while (at >= card.rows[row]) at -= card.rows[row++];
+    const rowName = card.rows.length === 2 ? ['top', 'bottom'][row] : ['top', 'middle', 'bottom'][row];
+    const size = card.rows[row];
+    const colName = size === 2 ? ['left', 'right'][at] : size === 3 ? ['left', 'centre', 'right'][at] : ['far left', 'centre left', 'centre right', 'far right'][at];
+    return `${rowName} row, ${colName}`;
+  };
   const values = [...card.rings.map((r) => r.score), 0];
   const dist = values.map((v) => ({ v, n: shots.filter((s) => score(s) === v).length + (v === 0 ? misses : 0) }));
   const lowest = card.rings.at(-1).score;
@@ -615,6 +635,19 @@ async function showAnalysis() {
     <div class="panel">
       ${shots.length ? shotNumberSvg(byStep) : ''}
       <p class="muted">${per > 1 ? 'First diagram shot to last' : 'First shot fired to last'}, using each card's shot order.</p>
+    </div>
+    <h2>Points lost by position on the card</h2>
+    <div class="panel">
+      ${places.length ? `
+        ${positionSvg(card, byPlace.map((p) => (p ? p.lost : null)))}
+        <div class="scale"><span>Fewest lost</span><i></i><span>Most lost</span></div>
+        <p class="muted">Average points dropped per shot at each aiming mark, across ${recs.length} card${recs.length === 1 ? '' : 's'}, whatever order they were shot in.
+        Colours run from the best position (green) to the worst (red), so they compare positions with each other; the numbers show how big the difference really is.</p>
+        <p class="muted">${even
+          ? 'No position stands out: the same is dropped everywhere.'
+          : `Most is dropped at the ${where(worst)}: ${byPlace[worst].lost.toFixed(1)} per shot over ${byPlace[worst].shots} shot${byPlace[worst].shots === 1 ? '' : 's'}.`}
+        ${recs.length < 5 ? 'With only a few cards this can be chance; it means more as cards build up.' : ''}</p>`
+        : '<p class="muted">No shots in this selection yet.</p>'}
     </div>
     <h2>Group, all ${shots.length} shots overlaid</h2>
     <div class="panel">${statsBlock(card, shots)}</div>` : '<p class="muted">No saved cards match this selection.</p>'}`;

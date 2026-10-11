@@ -1,7 +1,7 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { scoreShot, isShot, isMiss } from './model.js?v=2026.10.11-10';
+import { scoreShot, isShot, isMiss } from './model.js?v=2026.10.11-11';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';
@@ -94,6 +94,32 @@ export function orderSvg(card, order) {
   return `<svg class="order-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
     <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" rx="10" fill="${PAPER}"/>
     <path d="${path}" class="order-path"/>${spots}
+  </svg>`;
+}
+
+// The card with each aiming mark coloured by how many points are dropped
+// there: green for the best position through to red for the worst.
+// `lost` holds the average points dropped per shot at each diagram, or null
+// where there is no data.
+export function positionSvg(card, lost) {
+  const W = card.width;
+  const H = card.height;
+  const known = lost.filter((v) => v !== null);
+  const lo = Math.min(...known);
+  const hi = Math.max(...known);
+  const colour = (v) => {
+    if (v === null) return '#9aa3ad';
+    const t = hi > lo ? (v - lo) / (hi - lo) : 0;
+    return `hsl(${Math.round(125 * (1 - t))} 62% ${Math.round(36 + 6 * Math.sin(Math.PI * t))}%)`;
+  };
+  const r = card.aimingMarkDia / 2 + 3;
+  const marks = card.diagrams
+    .map((d, i) => `<g transform="translate(${d.x} ${d.y})">
+      <circle r="${f(r)}" fill="${colour(lost[i])}" stroke="${INK}" stroke-width="1.2"/>
+      <text class="pos-value" y="1.5">${lost[i] === null ? '–' : lost[i].toFixed(1)}</text></g>`)
+    .join('');
+  return `<svg class="card-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="${PAPER}"/>${marks}
   </svg>`;
 }
 
