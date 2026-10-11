@@ -285,3 +285,9 @@ label.check input { width: 20px; height: 20px; accent-color: var(--blue); }
 .pos-value { font: 700 20px sans-serif; fill: #fff; text-anchor: middle; dominant-baseline: central; }
 .scale { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .scale i { flex: 1; height: 12px; border-radius: 6px; background: linear-gradient(to right, hsl(125 62% 36%), hsl(62 62% 42%), hsl(0 62% 36%)); }
+
+/* Settings: advanced section */
+.advanced { margin: 34px 4px 4px; padding-top: 22px; border-top: 2px solid var(--line); }
+.advanced h2 { font-size: 19px; letter-spacing: 0; text-transform: none; color: var(--ink); margin: 0 0 2px; }
+.advanced p { margin: 0; }
+h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 20px 4px 8px; }
