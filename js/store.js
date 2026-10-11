@@ -1,6 +1,6 @@
 // On-device storage (IndexedDB): saved cards and settings.
 
-import { DEFAULT_SETTINGS } from './model.js';
+import { DEFAULT_SETTINGS } from './model.js?v=2026.10.11-10';
 
 // Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';
@@ -81,4 +81,24 @@ export async function persistence() {
   if (!navigator.storage?.persist) return 'unsupported';
   if (await navigator.storage.persisted()) return 'persistent';
   return (await navigator.storage.persist()) ? 'persistent' : 'best-effort';
+}
+
+// How much the saved cards take up. Sizes are measured from the stored data
+// itself; `quota` is the browser's own figure for space it will allow, where it gives one.
+export async function usage() {
+  const cards = await listCards();
+  let bytes = 0;
+  let photoBytes = 0;
+  for (const card of cards) {
+    const photos = (card.images ?? []).reduce((n, url) => n + (url?.length ?? 0), 0);
+    photoBytes += photos;
+    bytes += photos + JSON.stringify({ ...card, images: null }).length;
+  }
+  let quota = null;
+  try {
+    quota = (await navigator.storage?.estimate?.())?.quota ?? null;
+  } catch {
+    // Not available in this browser.
+  }
+  return { cards: cards.length, bytes, photoBytes, quota };
 }

@@ -4,7 +4,10 @@
     {
       "name": "targetscan",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8765"],
+      "runtimeArgs": [
+        "dev/serve.py",
+        "8765"
+      ],
       "port": 8765
     }
   ]
