@@ -2,6 +2,7 @@
 
 import { DEFAULT_SETTINGS } from './model.js';
 
+// Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';
 let dbPromise = null;
 
@@ -64,7 +65,7 @@ export async function exportData({ images }) {
 // Merges by id: cards in the file replace cards with the same id.
 export async function importData(data) {
   if (data?.app !== 'targetscan' || !Array.isArray(data.cards)) {
-    throw new Error('This is not a TargetScan backup file.');
+    throw new Error('This is not a Target Notebook backup file.');
   }
   let count = 0;
   for (const card of data.cards) {

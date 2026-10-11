@@ -38,10 +38,33 @@ export const CARD = {
   ],
 };
 
+// Firing orders, as diagram indices (0-9, reading order: four across the top,
+// two in the middle, four along the bottom) in the sequence they are shot.
+export const ORDER_METHODS = {
+  clockwise: { label: 'Clockwise loop', order: [0, 1, 2, 3, 5, 9, 8, 7, 6, 4] },
+  z: { label: 'Z method', order: [0, 1, 4, 6, 7, 8, 9, 5, 2, 3] },
+  rows: { label: 'Rows', order: [0, 1, 2, 3, 5, 4, 6, 7, 8, 9] },
+};
+const MIRROR = [3, 2, 1, 0, 5, 4, 9, 8, 7, 6];
+
+export const isOrder = (a) =>
+  Array.isArray(a) && a.length === 10 && [...a].sort((x, y) => x - y).every((v, i) => v === i);
+
+// spec: { method: 'clockwise' | 'z' | 'rows' | 'custom', mirror, custom }
+export function resolveOrder(spec) {
+  if (spec?.method === 'custom' && isOrder(spec.custom)) return [...spec.custom];
+  const base = (ORDER_METHODS[spec?.method] ?? ORDER_METHODS.clockwise).order;
+  return spec?.mirror ? base.map((p) => MIRROR[p]) : [...base];
+}
+
+// A card keeps the order it was scanned with; older cards follow the default.
+export const cardOrder = (card, settings) => resolveOrder(card.orderSpec ?? settings.shotOrder);
+
 export const DEFAULT_SETTINGS = {
   gauging: 'outward', // 'outward' | 'inward'
   gaugeDia: 5.6,
   clickMoa: 1 / 6,
+  shotOrder: { method: 'clockwise', mirror: false, custom: null },
 };
 
 // One minute of angle at 25 yards, in mm.
