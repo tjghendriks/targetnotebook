@@ -6,6 +6,9 @@ import * as store from './store.js';
 import { scanCard, ScanError } from './detect.js';
 import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js';
 
+// Shown in Settings so it is clear which release a device is running. Keep in step with sw.js.
+const VERSION = '2026.10.11-4';
+
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
 const esc = (s) =>
@@ -625,7 +628,8 @@ async function showSettings() {
         <button id="x-csv">All shots as CSV</button>
         <label class="btn">Restore backup<input id="x-import" type="file" accept="application/json,.json" hidden></label>
       </div>
-    </div>`;
+    </div>
+    <p class="muted" style="text-align:center">Target Notebook version ${VERSION}</p>`;
   const save = async () => {
     const gauge = Number($('#s-gauge').value);
     const clicks = Number($('#s-clicks').value);
