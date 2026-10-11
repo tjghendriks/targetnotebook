@@ -8,7 +8,7 @@ import { scanCard, ScanError } from './detect.js';
 import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js';
 
 // Shown in Settings so it is clear which release a device is running. Keep in step with sw.js.
-const VERSION = '2026.10.11-6';
+const VERSION = '2026.10.11-7';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -562,7 +562,11 @@ async function showAnalysis() {
   // Only cards with every shot accounted for have a total.
   const full = recs.filter((rec) => !unaccounted(rec)).reverse();
   const misses = recs.flatMap((rec) => rec.shots.filter(isMiss)).length;
-  const totals = full.map((rec) => cardTotal(rec, settings));
+  const totals = full.map((rec) => cardTotal(rec, settings)); // oldest first
+  const mean = (list) => list.reduce((a, b) => a + b, 0) / list.length;
+  // NSRA average: the most recent six cards with the lowest one dropped.
+  const nsra = totals.length >= 6 ? mean(totals.slice(-6).sort((a, b) => b - a).slice(0, 5)) : null;
+  const lastFive = totals.length >= 5 ? mean(totals.slice(-5)) : null;
   const per = card.shotsPerDiagram;
   const byStep = card.diagrams.map((_, k) => {
     const scores = recs
@@ -596,9 +600,10 @@ async function showAnalysis() {
     <div class="panel">
       ${totals.length ? `
         <div class="stats">
-          <div class="stat"><b>${(totals.reduce((a, b) => a + b, 0) / totals.length).toFixed(1)}</b><span>Average card</span></div>
+          <div class="stat"><b>${mean(totals).toFixed(1)}</b><span>Average, all ${totals.length} selected card${totals.length === 1 ? '' : 's'}</span></div>
+          <div class="stat"><b>${nsra === null ? '–' : nsra.toFixed(1)}</b><span>NSRA average (best 5 of last 6)${nsra === null ? ', needs 6 cards' : ''}</span></div>
+          <div class="stat"><b>${lastFive === null ? '–' : lastFive.toFixed(1)}</b><span>Average, last 5 cards${lastFive === null ? ', needs 5 cards' : ''}</span></div>
           <div class="stat"><b>${Math.max(...totals)}</b><span>Best card</span></div>
-          <div class="stat"><b>${totals.length}</b><span>Complete cards</span></div>
         </div>
         ${trendSvg(full.map((rec, i) => ({ label: esc(niceDate(rec.date)), value: totals[i] })))}`
         : '<p class="muted">No cards in this selection have every shot accounted for yet.</p>'}

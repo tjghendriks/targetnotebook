@@ -1,6 +1,6 @@
 // Offline support: serve from the network when there is one, otherwise from the cache.
 // Keep VERSION in step with js/app.js.
-const VERSION = '2026.10.11-6';
+const VERSION = '2026.10.11-7';
 const CACHE = `targetnotebook-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
