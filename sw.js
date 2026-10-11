@@ -1,5 +1,7 @@
 // Offline support: serve from the network when there is one, otherwise from the cache.
-const CACHE = 'targetnotebook-v3';
+// Keep VERSION in step with js/app.js.
+const VERSION = '2026.10.11-6';
+const CACHE = `targetnotebook-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',
   'js/app.js', 'js/model.js', 'js/detect.js', 'js/render.js', 'js/store.js',
@@ -21,7 +23,9 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    // 'no-cache' makes the browser check with the server every time, so a new
+    // release is picked up at once instead of after its own cache expires.
+    fetch(e.request, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();

@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Target Notebook real photo check</title>
+<body style="font:13px/1.4 monospace;padding:12px;background:#fff">
+<p>Runs real photos from reference/ (kept out of the repo) through the detector and shows each squared-up
+diagram with the detected shot. Add ?f=name.jpg to run one photo.</p>
+<div id="out"></div>
+<script type="module">
+import { scanCard } from '../js/detect.js';
+import { CARDS, scoreShot, DEFAULT_SETTINGS } from '../js/model.js';
+
+const query = new URLSearchParams(location.search);
+const files = query.getAll('f');
+const zoom = Number(query.get('zoom')) || 0;
+// ?map=G or ?map=D replaces the photo with the detector's disturbed-paper map (after or before clean-up).
+const showMap = query.get('map');
+const mapUrl = (m) => {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = m.h;
+  const im = new ImageData(m.h, m.h);
+  const a = m[showMap] ?? m.G;
+  for (let i = 0; i < a.length; i++) {
+    const v = Math.min(255, a[i] * 400);
+    im.data[4 * i] = im.data[4 * i + 1] = im.data[4 * i + 2] = v;
+    im.data[4 * i + 3] = 255;
+  }
+  cv.getContext('2d').putImageData(im, 0, 0);
+  return cv.toDataURL();
+};
+const list = files.length ? files : ['real-light-98.jpg', 'real-dark-shadow.jpg', 'real-dark-lap.jpg'];
+const out = document.getElementById('out');
+window.results = {};
+for (const file of list) {
+  const box = document.createElement('div');
+  out.append(box);
+  try {
+    const t0 = performance.now();
+    const r = await scanCard(`../reference/${file}`, { debug: showMap });
+    const card = CARDS[r.type];
+    const half = card.patchMm / 2;
+    let total = 0;
+    const cells = r.diagrams.map((d, i) => {
+      const marks = d.shots.map((s) => {
+        if (!s) return '';
+        total += scoreShot(s.x, s.y, card, DEFAULT_SETTINGS);
+        return `<circle cx="${s.x}" cy="${-s.y}" r="2.8" fill="none" stroke="${s.confidence === 'high' ? '#00e5ff' : '#ff9800'}" stroke-width="0.35"/>`;
+      }).join('');
+      const label = d.shots.map((s) => (s ? scoreShot(s.x, s.y, card, DEFAULT_SETTINGS) + (s.confidence === 'high' ? '' : '?') : 'none')).join(' ');
+      // ?zoom=<mm> shows only the middle of each diagram, that many mm across.
+      const px = zoom ? 190 : 150;
+      const full = zoom ? (px * card.patchMm) / zoom : px;
+      const off = (px - full) / 2;
+      const place = `position:absolute;left:${off}px;top:${off}px;width:${full}px;height:${full}px;max-width:none`;
+      return `<div style="display:inline-block;margin:2px;text-align:center"><div style="position:relative;overflow:hidden;width:${px}px;height:${px}px">
+        <img src="${showMap ? mapUrl(d.map) : d.image}" style="${place}">
+        <svg viewBox="${-half} ${-half} ${card.patchMm} ${card.patchMm}" style="${place}">${marks}</svg></div>${i + 1}: ${label}${d.aligned ? '' : ' (unaligned)'}</div>`;
+    }).join('');
+    window.results[file] = { type: r.type, flipped: r.flipped, total, ppm: r.pixelsPerMm, shots: r.diagrams.map((d) => d.shots) };
+    box.innerHTML = `<h3 style="margin:8px 0 2px">${file}: ${r.type}, flipped=${r.flipped}, ${r.pixelsPerMm.toFixed(1)} px/mm, total ${total}, ${Math.round(performance.now() - t0)} ms</h3>${cells}`;
+  } catch (err) {
+    window.results[file] = { error: err.message };
+    box.innerHTML = `<h3>${file}: FAILED: ${err.message}</h3>`;
+  }
+}
+window.results.done = true;
+</script>
+</body>

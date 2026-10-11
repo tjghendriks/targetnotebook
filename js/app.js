@@ -1,10 +1,14 @@
 import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
+  isShot, isMiss, shotValue, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
 } from './model.js';
 import * as store from './store.js';
 import { scanCard, ScanError } from './detect.js';
 import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js';
+
+// Shown in Settings so it is clear which release a device is running. Keep in step with sw.js.
+const VERSION = '2026.10.11-6';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -19,7 +23,7 @@ const niceDate = (iso) => {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 };
-const unsure = (s) => s && s.source === 'auto' && s.confidence !== 'high';
+const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high';
 
 let settings;
 let current = null; // the card being viewed or edited
@@ -73,7 +77,8 @@ function csvFor(recs) {
   for (const rec of recs) {
     const card = cardType(rec);
     for (const { shot: s, number, diagram } of firingSequence(rec)) {
-      if (!s) continue;
+      if (isMiss(s)) rows.push([rec.id, card.id, rec.date, q(rec.name), number, diagram + 1, '', '', 0, 'miss'].join(','));
+      if (!isShot(s)) continue;
       rows.push([rec.id, card.id, rec.date, q(rec.name), number, diagram + 1, s.x.toFixed(2), s.y.toFixed(2), scoreShot(s.x, s.y, card, settings), s.source].join(','));
     }
   }
@@ -104,38 +109,44 @@ function statsBlock(card, shots) {
     </div>`;
 }
 
-// A firing-order chooser: method, mirror option, and tap-to-number for a custom
-// order. Calls onChange with a new spec whenever a complete order is chosen.
+// A firing-order chooser: a picture of the card for each method (tap to
+// choose), a mirror option, and tap-to-number for a custom order. Calls
+// onChange with a new spec whenever a complete order is chosen.
 function mountOrderPicker(el, card, spec, onChange) {
   spec = { method: 'clockwise', mirror: false, custom: null, ...spec };
   const count = card.diagrams.length;
   let taps = null; // partly entered custom order
   const draw = () => {
     const custom = spec.method === 'custom';
-    const order = taps ?? resolveOrder(card, spec);
+    const tile = (key, label, order) => `
+      <button class="order-tile ${spec.method === key ? 'on' : ''}" data-method="${key}" aria-pressed="${spec.method === key}">
+        ${orderSvg(card, order)}<span>${label}</span>
+      </button>`;
+    const customOrder = isOrder(spec.custom, count) ? spec.custom : resolveOrder(card, spec);
     el.innerHTML = `
-      <div class="row">
-        <label class="field">Order<select data-o="method">
-          ${Object.entries(card.orders).map(([k, m]) => `<option value="${k}" ${spec.method === k ? 'selected' : ''}>${m.label}</option>`).join('')}
-          <option value="custom" ${custom ? 'selected' : ''}>Custom</option>
-        </select></label>
-        ${custom
-          ? '<button data-o="clear">Clear and re-enter</button>'
-          : `<label class="check"><input type="checkbox" data-o="mirror" ${spec.mirror ? 'checked' : ''}> Mirror image (left-handed)</label>`}
+      <div class="order-tiles">
+        ${Object.entries(card.orders).map(([key, m]) => tile(key, m.label, resolveOrder(card, { method: key, mirror: spec.mirror }))).join('')}
+        ${tile('custom', 'Custom', customOrder)}
       </div>
-      ${orderSvg(card, order)}
-      <p class="muted">${taps
-        ? `Tap the diagrams in the order they are shot. ${count - taps.length} to go.`
-        : custom ? 'Custom order. Use Clear and re-enter to change it.' : 'Numbers show the order the diagrams are shot.'}</p>`;
-    el.querySelector('[data-o=method]').addEventListener('change', (e) => {
-      const method = e.target.value;
-      // Start a custom order from whatever was showing, so it is valid straight away.
+      ${custom ? `
+        <div class="order-entry">
+          ${orderSvg(card, taps ?? customOrder)}
+          <p class="muted">${taps
+            ? `Tap the aiming marks in the order they are shot. ${count - taps.length} to go.`
+            : 'Your custom order. To change it, clear it and tap the aiming marks in the order they are shot.'}</p>
+          <button data-o="clear">Clear and re-enter</button>
+        </div>`
+        : `<label class="check"><input type="checkbox" data-o="mirror" ${spec.mirror ? 'checked' : ''}> Mirror image (left-handed)</label>`}`;
+    el.querySelectorAll('.order-tile').forEach((b) => b.addEventListener('click', () => {
+      const method = b.dataset.method;
+      if (method === spec.method) return;
+      // Start a custom order from whatever was chosen, so it is valid straight away.
       const seed = method === 'custom' && !isOrder(spec.custom, count) ? resolveOrder(card, spec) : spec.custom;
       spec = { ...spec, method, custom: seed };
       taps = null;
       onChange(spec);
       draw();
-    });
+    }));
     el.querySelector('[data-o=mirror]')?.addEventListener('change', (e) => {
       spec = { ...spec, mirror: e.target.checked };
       onChange(spec);
@@ -146,7 +157,7 @@ function mountOrderPicker(el, card, spec, onChange) {
       draw();
     });
     if (taps) {
-      el.querySelectorAll('.op').forEach((g) => g.addEventListener('click', () => {
+      el.querySelectorAll('.order-entry .op').forEach((g) => g.addEventListener('click', () => {
         const p = Number(g.dataset.p);
         if (taps.includes(p)) return;
         taps.push(p);
@@ -179,10 +190,10 @@ async function showCards() {
     ${recs.length ? '' : '<p class="muted">No cards saved yet.</p>'}
     <ul class="card-list">
       ${recs.map((rec) => {
-        const n = cardShots(rec).length;
+        const open = unaccounted(rec);
         return `<li><a href="#/card/${esc(rec.id)}">
-          <span class="total">${cardTotal(rec, settings)}<small>${n < rec.shots.length ? ` /${n * 10}` : ''}</small></span>
-          <span class="meta"><b>${esc(rec.name || 'Untitled')}</b><span class="muted">${esc(niceDate(rec.date))} · ${esc(cardType(rec).label)}</span></span>
+          <span class="total ${open ? 'pending' : ''}">${open ? '?' : cardTotal(rec, settings)}</span>
+          <span class="meta"><b>${esc(rec.name || 'Untitled')}</b><span class="muted">${esc(niceDate(rec.date))} · ${esc(cardType(rec).label)}${open ? ` · ${open} shot${open === 1 ? '' : 's'} to confirm` : ''}</span></span>
           <span class="chev">›</span></a></li>`;
       }).join('')}
     </ul>`;
@@ -240,15 +251,20 @@ function renderCard() {
   const card = cardType(rec);
   const order = cardOrder(rec, settings);
   const shots = cardShots(rec);
-  const missing = rec.shots.length - shots.length;
+  const missing = unaccounted(rec);
   const toCheck = rec.shots.filter(unsure).length;
   const notes = [];
-  if (missing) notes.push(`${missing} shot${missing === 1 ? ' is' : 's are'} not marked. Tap a diagram to place ${missing === 1 ? 'it' : 'them'}.`);
+  if (missing) {
+    notes.push(`${missing} shot${missing === 1 ? ' was' : 's were'} not detected. Tap the ringed diagram${missing === 1 ? '' : 's'} and either place ` +
+      `the shot or confirm there is none. The score is shown once every shot is accounted for.`);
+  }
   if (toCheck) notes.push(`${toCheck} shot${toCheck === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.`);
   view.innerHTML = `
     <div class="panel">
       ${cardSvg(rec, card, settings, order)}
-      <div class="score-line"><span class="big">${cardTotal(rec, settings)}</span><span class="of">/ 100${missing ? ` (${shots.length} shots)` : ''}</span></div>
+      ${missing
+        ? `<div class="score-line"><span class="big pending">?</span><span class="of">Score not shown yet</span></div>`
+        : `<div class="score-line"><span class="big">${cardTotal(rec, settings)}</span><span class="of">/ 100</span></div>`}
       ${notes.map((n) => `<p class="notice">${n}</p>`).join('')}
       <p class="muted">${esc(card.label)}, ${card.gauging} gauging. Tap any diagram to check the shots against the photo and move them if needed. The small numbers are the order fired.</p>
       <div class="row">
@@ -264,9 +280,11 @@ function renderCard() {
     <div class="panel">
       <table>
         <tr><th>Shot</th><th>Score</th><th>X mm</th><th>Y mm</th><th>From centre</th></tr>
-        ${firingSequence(rec).map(({ shot: s, number }) => s
+        ${firingSequence(rec).map(({ shot: s, number }) => isShot(s)
           ? `<tr><td>${number}</td><td><b>${scoreShot(s.x, s.y, card, settings)}</b></td><td>${mm(s.x)}</td><td>${mm(s.y)}</td><td>${Math.hypot(s.x, s.y).toFixed(1)}</td></tr>`
-          : `<tr><td>${number}</td><td colspan="4" class="muted">not marked</td></tr>`).join('')}
+          : isMiss(s)
+            ? `<tr><td>${number}</td><td><b>0</b></td><td colspan="3" class="muted">no shot on the diagram</td></tr>`
+            : `<tr><td>${number}</td><td colspan="4" class="muted">not detected, to be confirmed</td></tr>`).join('')}
       </table>
       <p class="muted">In the order fired${card.shotsPerDiagram > 1 ? ' (the two shots on a diagram are listed together; which came first is not known)' : ''}. X is right of centre, Y is above centre.</p>
     </div>
@@ -336,7 +354,7 @@ async function flipCard() {
       };
       img.src = url;
     });
-  current.shots = current.shots.map((s) => (s ? { ...s, x: -s.x, y: -s.y } : null)).reverse();
+  current.shots = current.shots.map((s) => (isShot(s) ? { ...s, x: -s.x, y: -s.y } : s)).reverse();
   if (current.images) current.images = (await Promise.all(current.images.map(turn))).reverse();
   dirty = true;
   renderCard();
@@ -360,27 +378,29 @@ function openEditor(diagram) {
   const pick = () => {
     // Start on the first shot that needs attention.
     const shots = Array.from({ length: per }, (_, j) => current.shots[slot(j)]);
-    const j = shots.findIndex((s) => !s || unsure(s));
+    const j = shots.findIndex((s) => (!isShot(s) && !isMiss(s)) || unsure(s));
     active = j < 0 ? 0 : j;
   };
 
   const draw = () => {
-    const shot = current.shots[slot()];
+    const entry = current.shots[slot()];
+    const shot = isShot(entry) ? entry : null;
+    const miss = isMiss(entry);
     const image = current.images?.[diagram];
     const step = order.indexOf(diagram);
     const g = settings.gaugeDia / 2;
     const markR = card.aimingMarkDia / 2;
-    const others = Array.from({ length: per }, (_, j) => j).filter((j) => j !== active && current.shots[slot(j)]);
+    const others = Array.from({ length: per }, (_, j) => j).filter((j) => j !== active && isShot(current.shots[slot(j)]));
     el.innerHTML = `<div class="ed">
       <div class="ed-head">
         <div><small>${per > 1 ? `Diagram ${step + 1} of ${order.length}` : `Shot ${step + 1} of ${order.length}`}</small>
-          <span class="ed-score" id="ed-score">${shot ? scoreShot(shot.x, shot.y, card, settings) : '–'}</span></div>
-        <div style="text-align:right"><small id="ed-pos">${shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm` : 'No shot marked'}</small>
-          <small>${shot ? (shot.source === 'auto' ? `Detected${shot.confidence === 'high' ? '' : ', please check'}` : 'Placed by hand') : 'Tap the hole to place it'}</small></div>
+          <span class="ed-score" id="ed-score">${shot ? scoreShot(shot.x, shot.y, card, settings) : miss ? 0 : '?'}</span></div>
+        <div style="text-align:right"><small id="ed-pos">${shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm` : miss ? 'Confirmed: no shot here' : 'No shot detected'}</small>
+          <small>${shot ? (shot.source === 'auto' ? `Detected${shot.confidence === 'high' ? '' : ', please check'}` : 'Placed by hand') : miss ? 'Tap the hole if there is one after all' : 'Tap the hole, or confirm there is none'}</small></div>
       </div>
       ${per > 1 ? `<div class="row pickers">${Array.from({ length: per }, (_, j) => {
         const s = current.shots[slot(j)];
-        return `<button data-pick="${j}" class="${j === active ? 'primary' : ''}">Shot ${String.fromCharCode(65 + j)}: ${s ? scoreShot(s.x, s.y, card, settings) : 'not placed'}</button>`;
+        return `<button data-pick="${j}" class="${j === active ? 'primary' : ''}">Shot ${String.fromCharCode(65 + j)}: ${isShot(s) ? scoreShot(s.x, s.y, card, settings) : isMiss(s) ? '0, no shot' : 'to confirm'}</button>`;
       }).join('')}</div>` : ''}
       <div class="stage" id="stage">
         <div class="zoomer" id="zoomer" style="transform:scale(${zoom});transform-origin:${shot ? originFor(shot) : '50% 50%'}">
@@ -405,7 +425,9 @@ function openEditor(diagram) {
       </div>
       <div class="row">
         <button id="ed-zoom">${zoom > 1 ? 'Zoom out' : 'Zoom in'}</button>
-        <button id="ed-remove" ${shot ? '' : 'disabled'}>Remove shot</button>
+        ${shot || miss
+          ? `<button id="ed-remove">${shot ? 'Remove shot' : 'Undo "no shot"'}</button>`
+          : '<button id="ed-miss">No shot here (scores 0)</button>'}
       </div>
       <div class="row">
         <button id="ed-prev" ${step ? '' : 'disabled'}>‹ Previous</button>
@@ -432,7 +454,7 @@ function openEditor(diagram) {
       const rect = stage.getBoundingClientRect();
       const scale = rect.width / size;
       const shot = current.shots[slot()];
-      if (!shot) {
+      if (!isShot(shot)) {
         setShot((e.clientX - rect.left) / scale - half, half - (e.clientY - rect.top) / scale);
         return draw();
       }
@@ -469,7 +491,7 @@ function openEditor(diagram) {
     el.querySelectorAll('.nudge button').forEach((b) =>
       b.addEventListener('click', () => {
         const s = current.shots[slot()];
-        if (!s) return;
+        if (!isShot(s)) return;
         setShot(s.x + Number(b.dataset.nx), s.y + Number(b.dataset.ny));
         draw();
       })
@@ -478,10 +500,15 @@ function openEditor(diagram) {
       zoom = zoom > 1 ? 1 : 3;
       draw();
     });
-    $('#ed-remove').addEventListener('click', () => {
+    $('#ed-remove')?.addEventListener('click', () => {
       current.shots[slot()] = null;
       dirty = true;
       zoom = 1;
+      draw();
+    });
+    $('#ed-miss')?.addEventListener('click', () => {
+      current.shots[slot()] = { miss: true, source: 'manual' };
+      dirty = true;
       draw();
     });
     const go = (step) => {
@@ -532,7 +559,9 @@ async function showAnalysis() {
   if (scope.last !== 'all') recs = recs.slice(0, Number(scope.last));
   const shots = recs.flatMap(cardShots);
   const score = (s) => scoreShot(s.x, s.y, card, settings);
-  const full = recs.filter((rec) => cardShots(rec).length === rec.shots.length).reverse();
+  // Only cards with every shot accounted for have a total.
+  const full = recs.filter((rec) => !unaccounted(rec)).reverse();
+  const misses = recs.flatMap((rec) => rec.shots.filter(isMiss)).length;
   const totals = full.map((rec) => cardTotal(rec, settings));
   const per = card.shotsPerDiagram;
   const byStep = card.diagrams.map((_, k) => {
@@ -541,12 +570,12 @@ async function showAnalysis() {
         const d = cardOrder(rec, settings)[k];
         return rec.shots.slice(d * per, d * per + per);
       })
-      .filter(Boolean)
-      .map(score);
+      .filter((s) => isShot(s) || isMiss(s))
+      .map((s) => shotValue(s, card, settings));
     return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
   });
   const values = [...card.rings.map((r) => r.score), 0];
-  const dist = values.map((v) => ({ v, n: shots.filter((s) => score(s) === v).length }));
+  const dist = values.map((v) => ({ v, n: shots.filter((s) => score(s) === v).length + (v === 0 ? misses : 0) }));
   const lowest = card.rings.at(-1).score;
   view.innerHTML = `
     <div class="panel"><div class="row">
@@ -572,7 +601,7 @@ async function showAnalysis() {
           <div class="stat"><b>${totals.length}</b><span>Complete cards</span></div>
         </div>
         ${trendSvg(full.map((rec, i) => ({ label: esc(niceDate(rec.date)), value: totals[i] })))}`
-        : '<p class="muted">No complete cards in this selection.</p>'}
+        : '<p class="muted">No cards in this selection have every shot accounted for yet.</p>'}
       <table style="margin-top:10px"><tr><th>Shot value</th>${dist.map((d) => `<th>${d.v || `Outside ${lowest}`}</th>`).join('')}</tr>
         <tr><td>Count</td>${dist.map((d) => `<td>${d.n}</td>`).join('')}</tr></table>
     </div>
@@ -625,7 +654,8 @@ async function showSettings() {
         <button id="x-csv">All shots as CSV</button>
         <label class="btn">Restore backup<input id="x-import" type="file" accept="application/json,.json" hidden></label>
       </div>
-    </div>`;
+    </div>
+    <p class="muted" style="text-align:center">Target Notebook version ${VERSION}</p>`;
   const save = async () => {
     const gauge = Number($('#s-gauge').value);
     const clicks = Number($('#s-clicks').value);

@@ -134,12 +134,29 @@ function darkComponents(data, w, h, thr) {
   return out;
 }
 
+function minFilter3(data, w, h) {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let m = 255;
+      for (let j = Math.max(0, y - 1); j <= Math.min(h - 1, y + 1); j++) {
+        for (let i = Math.max(0, x - 1); i <= Math.min(w - 1, x + 1); i++) m = Math.min(m, data[j * w + i]);
+      }
+      out[y * w + x] = m;
+    }
+  }
+  return out;
+}
+
 // The n round dark blobs most alike in size.
 export function findMarks(img, n) {
   const f = Math.max(1, Math.ceil(Math.max(img.w, img.h) / 900));
   const small = downscaleLuma(img, f);
   const long = Math.max(small.w, small.h);
   const base = otsu(small.data);
+  // Bright ring lines can cut a mark into separate rings; spreading the dark
+  // by a pixel joins them back into one disc.
+  small.data = minFilter3(small.data, small.w, small.h);
   let bestCount = 0;
   for (const k of [1, 0.85, 1.15, 0.7]) {
     const round = darkComponents(small.data, small.w, small.h, base * k).filter((c) => {
@@ -345,20 +362,22 @@ export function applyH(H, x, y) {
 
 // ---------- rectified patches ----------
 
-// A square patch centred on card position (cx, cy). `scale` is card mm per
-// patch mm, used to correct the local scale once the aiming mark is measured.
-function extractPatch(img, H, cx, cy, sizeMm, ppm, scale = 1, wantRgb = false) {
+// A square patch centred on card position (cx, cy). `T` is a 2x2 matrix taking
+// patch mm to card mm, used to correct the local scale and any stretch once
+// the aiming mark is measured.
+function extractPatch(img, H, cx, cy, sizeMm, ppm, T = [1, 0, 0, 1], wantRgb = false) {
   const n = Math.round(sizeMm * ppm);
   const c = (n - 1) / 2;
   const luma = new Float32Array(n * n);
   const blue = new Float32Array(n * n);
   const rgb = wantRgb ? new Uint8ClampedArray(n * n * 4) : null;
   const { w, h, rgba } = img;
-  const k = scale / ppm;
   for (let j = 0; j < n; j++) {
-    const my = cy + (j - c) * k;
+    const v = (j - c) / ppm;
     for (let i = 0; i < n; i++) {
-      const mx = cx + (i - c) * k;
+      const u = (i - c) / ppm;
+      const mx = cx + T[0] * u + T[1] * v;
+      const my = cy + T[2] * u + T[3] * v;
       const den = H[6] * mx + H[7] * my + H[8];
       let x = (H[0] * mx + H[1] * my + H[2]) / den;
       let y = (H[3] * mx + H[4] * my + H[5]) / den;
@@ -464,7 +483,62 @@ function fitMark(patch, markR) {
     pts = pts.filter((_, i) => res[i] <= limit);
   }
   if (!fit || fit.points < 150 || Math.abs(fit.r - markR) > 4) return null;
+  fit.T = [fit.r / markR, 0, 0, fit.r / markR];
+  // A card that is not flat shows the mark slightly oval. Fit an ellipse to the
+  // same edge points and return the stretch that makes it round again.
+  const oval = fitEllipse(pts, markR);
+  if (oval && Math.abs(oval.major / fit.r - 1) < 0.15 && oval.major / oval.minor < 1.25) {
+    fit.ox = oval.ox;
+    fit.oy = oval.oy;
+    fit.T = oval.T;
+  }
   return fit;
+}
+
+// Least-squares ellipse a x^2 + b xy + c y^2 + d x + e y = 1 through edge
+// points (patch mm, origin inside the ellipse).
+function fitEllipse(pts, markR) {
+  if (pts.length < 150) return null;
+  const A = Array.from({ length: 5 }, () => [0, 0, 0, 0, 0]);
+  const rhs = [0, 0, 0, 0, 0];
+  for (const [px, py] of pts) {
+    const x = px / markR;
+    const y = py / markR;
+    const row = [x * x, x * y, y * y, x, y];
+    for (let i = 0; i < 5; i++) {
+      rhs[i] += row[i];
+      for (let j = 0; j < 5; j++) A[i][j] += row[i] * row[j];
+    }
+  }
+  const [a, b, c, d, e] = solve(A, rhs);
+  const det = 4 * a * c - b * b;
+  if (!(det > 0)) return null;
+  const cx = (-2 * c * d + b * e) / det;
+  const cy = (-2 * a * e + b * d) / det;
+  const k = 1 + a * cx * cx + b * cx * cy + c * cy * cy;
+  // (p - centre)' M (p - centre) = 1, with M symmetric.
+  const m00 = a / k;
+  const m01 = b / 2 / k;
+  const m11 = c / k;
+  const mean = (m00 + m11) / 2;
+  const diff = Math.hypot((m00 - m11) / 2, m01);
+  const l1 = mean + diff;
+  const l2 = mean - diff;
+  if (!(l2 > 0)) return null;
+  const ang = 0.5 * Math.atan2(2 * m01, m00 - m11);
+  const ca = Math.cos(ang);
+  const sa = Math.sin(ang);
+  // Semi-axes in units of markR: s1 along (ca, sa), s2 across it.
+  const s1 = 1 / Math.sqrt(l1);
+  const s2 = 1 / Math.sqrt(l2);
+  return {
+    ox: cx * markR,
+    oy: cy * markR,
+    major: Math.max(s1, s2) * markR,
+    minor: Math.min(s1, s2) * markR,
+    // M^(-1/2): takes the unit circle onto the ellipse without rotating it.
+    T: [s1 * ca * ca + s2 * sa * sa, (s1 - s2) * ca * sa, (s1 - s2) * ca * sa, s2 * ca * ca + s1 * sa * sa],
+  };
 }
 
 // ---------- shot detection ----------
@@ -507,28 +581,31 @@ function boxMean(I, n, x, y, half) {
   return s / ((x1 - x0) * (y1 - y0));
 }
 
-// Grey-scale erosion: each pixel becomes the smallest value within `rad` px.
-// It wipes out anything thinner than the window (printed numerals, slivers
-// along a ring) while a solid shot hole only shrinks a little.
-function erode(a, n, rad) {
+// Grey-scale erosion or dilation over a square window: each pixel becomes the
+// smallest (or, with `grow`, the largest) value within `rad` px.
+function morph(a, n, rad, grow) {
+  const pick = grow ? Math.max : Math.min;
+  const start = grow ? -Infinity : Infinity;
   const tmp = new Float32Array(n * n);
   const out = new Float32Array(n * n);
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
-      let m = Infinity;
-      for (let k = Math.max(0, x - rad); k <= Math.min(n - 1, x + rad); k++) m = Math.min(m, a[y * n + k]);
+      let m = start;
+      for (let k = Math.max(0, x - rad); k <= Math.min(n - 1, x + rad); k++) m = pick(m, a[y * n + k]);
       tmp[y * n + x] = m;
     }
   }
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
-      let m = Infinity;
-      for (let k = Math.max(0, y - rad); k <= Math.min(n - 1, y + rad); k++) m = Math.min(m, tmp[k * n + x]);
+      let m = start;
+      for (let k = Math.max(0, y - rad); k <= Math.min(n - 1, y + rad); k++) m = pick(m, tmp[k * n + x]);
       out[y * n + x] = m;
     }
   }
   return out;
 }
+const erode = (a, n, rad) => morph(a, n, rad, false);
+const dilate = (a, n, rad) => morph(a, n, rad, true);
 
 // Residual of the patch against its own radial median profile, 0..1.
 export function residualMap(patch, card) {
@@ -548,7 +625,7 @@ export function residualMap(patch, card) {
   }
   const contrast = Math.max(20, El[Math.round((markR + 4.3) * ppm)] - El[Math.round(0.9 * markR * ppm)]);
   // Residual explained by a small misregistration of the printed rings.
-  const slack = Math.max(1, Math.round(0.3 * ppm));
+  const slack = Math.max(1, Math.round(0.4 * ppm));
   const tol = (E) => {
     const t = new Float32Array(bins);
     for (let k = 0; k < bins; k++) {
@@ -562,36 +639,58 @@ export function residualMap(patch, card) {
   const Tb = tol(Eb);
   const Rl = new Float32Array(n * n);
   const Rb = new Float32Array(n * n);
+  const Xl = new Float32Array(n * n); // expected value at each pixel
+  const Xb = new Float32Array(n * n);
   const bin = new Int16Array(n * n).fill(-1);
-  const sums = [0, 0, 0]; // N, Sxx, Syy
-  const acc = { l: [0, 0, 0], b: [0, 0, 0] };
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
-      const x = i - c;
-      const y = j - c;
-      const r = Math.hypot(x, y);
+      const r = Math.hypot(i - c, j - c);
       if (r > RMAX * ppm) continue;
       const k0 = Math.floor(r);
       const f = r - k0;
       const o = j * n + i;
       bin[o] = Math.round(r);
-      Rl[o] = luma[o] - (El[k0] * (1 - f) + El[k0 + 1] * f);
-      Rb[o] = blue[o] - (Eb[k0] * (1 - f) + Eb[k0 + 1] * f);
-      sums[0]++;
-      sums[1] += x * x;
-      sums[2] += y * y;
-      acc.l[0] += Rl[o]; acc.l[1] += Rl[o] * x; acc.l[2] += Rl[o] * y;
-      acc.b[0] += Rb[o]; acc.b[1] += Rb[o] * x; acc.b[2] += Rb[o] * y;
+      Xl[o] = El[k0] * (1 - f) + El[k0 + 1] * f;
+      Xb[o] = Eb[k0] * (1 - f) + Eb[k0 + 1] * f;
+      Rl[o] = luma[o] - Xl[o];
+      Rb[o] = blue[o] - Xb[o];
     }
   }
-  // Remove a lighting gradient (least-squares plane; the mask is symmetric).
-  const plane = (s) => [s[0] / sums[0], s[1] / sums[1], s[2] / sums[2]];
-  const Pl = plane(acc.l);
-  const Pb = plane(acc.b);
-  // D discounts ring misregistration (used to find the hole); raw does not
-  // (used to outline it, so a ring crossing the hole does not split it).
+  // Uneven light scales the whole diagram's brightness across the patch. Fit
+  // that as a gentle slope in gain, ignoring pixels that are far off (holes,
+  // handwriting) so they cannot tilt it.
+  const gainSlope = (R, X) => {
+    let coef = [0, 0, 0];
+    for (let pass = 0; pass < 3; pass++) {
+      const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      const rhs = [0, 0, 0];
+      for (let j = 0; j < n; j += 3) {
+        for (let i = 0; i < n; i += 3) {
+          const o = j * n + i;
+          if (bin[o] < 0) continue;
+          const x = i - c;
+          const y = j - c;
+          const e = X[o];
+          if (pass && Math.abs(R[o] - e * (coef[0] + coef[1] * x + coef[2] * y)) > 0.12 * contrast) continue;
+          const v = [e, e * x, e * y];
+          for (let a = 0; a < 3; a++) {
+            rhs[a] += v[a] * R[o];
+            for (let b = 0; b < 3; b++) A[a][b] += v[a] * v[b];
+          }
+        }
+      }
+      const next = solve(A, rhs);
+      if (next.every(Number.isFinite)) coef = next;
+    }
+    return coef;
+  };
+  const Pl = gainSlope(Rl, Xl);
+  const Pb = gainSlope(Rb, Xb);
+  // D is how far each pixel is from what a clean diagram would show there,
+  // discounting ring misregistration (used to find holes). `signed` keeps
+  // the direction, lighter or darker (used to outline the opening).
   const D = new Float32Array(n * n);
-  const raw = new Float32Array(n * n);
+  const signed = new Float32Array(n * n);
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const o = j * n + i;
@@ -599,104 +698,37 @@ export function residualMap(patch, card) {
       if (k < 0) continue;
       const x = i - c;
       const y = j - c;
-      const dl = Math.abs(Rl[o] - Pl[0] - Pl[1] * x - Pl[2] * y);
-      const db = Math.abs(Rb[o] - Pb[0] - Pb[1] * x - Pb[2] * y);
-      raw[o] = Math.max(dl, db) / contrast;
-      D[o] = Math.max(0, dl - Tl[k], db - Tb[k]) / contrast;
+      const sl = Rl[o] - Xl[o] * (Pl[0] + Pl[1] * x + Pl[2] * y);
+      const sb = Rb[o] - Xb[o] * (Pb[0] + Pb[1] * x + Pb[2] * y);
+      signed[o] = (Math.abs(sl) >= Math.abs(sb) ? sl : sb) / contrast;
+      D[o] = Math.max(0, Math.abs(sl) - Tl[k], Math.abs(sb) - Tb[k]) / contrast;
     }
   }
-  return { D, raw, profile: El, contrast, rmax: RMAX };
+  return { D, signed, profile: El, contrast, rmax: RMAX };
 }
 
-// Shared set-up for finding holes in a patch.
-function shotSearch(patch, card) {
-  const { n, ppm } = patch;
-  const c = (n - 1) / 2;
-  const { D, raw } = residualMap(patch, card);
-  const thin = Math.round(0.45 * ppm);
-  const Iw = integral(erode(D, n, thin), n);
-  const Ir = integral(raw, n);
-  const Ie = integral(erode(raw, n, thin), n);
-  const half = Math.round((3.9 * ppm) / 2);
-  const reach = (card.searchR - 2) * ppm;
-  // Strongest gauge-sized response, keeping clear of the `avoid` circles ({x, y, r} in px).
-  const peak = (avoid = []) => {
-    let best = { v: 0, x: 0, y: 0 };
-    for (let j = half; j < n - half; j += 2) {
-      for (let i = half; i < n - half; i += 2) {
-        if (Math.hypot(i - c, j - c) > reach) continue;
-        if (avoid.some((a) => Math.hypot(i - a.x, j - a.y) < a.r)) continue;
-        const v = boxMean(Iw, n, i, j, half);
-        if (v > best.v) best = { v, x: i, y: j };
-      }
-    }
-    return best;
-  };
-  const toShot = (hx, hy, confidence) => ({ x: (hx - c) / ppm, y: -(hy - c) / ppm, confidence });
-  return { n, ppm, Ir, Ie, thin, half, peak, toShot };
-}
-
-// One shot per diagram: the single region that stands out.
-function detectShot(patch, card) {
-  const { n, ppm, Ir, half, peak, toShot } = shotSearch(patch, card);
-  const p1 = peak();
-  const p2 = peak([{ x: p1.x, y: p1.y, r: 7 * ppm }]);
-  const ratio = p1.v / Math.max(p2.v, 1e-4);
-  if (p1.v < 0.08 || ratio < 1.6) return [null];
-
-  // Outline the hole and settle on its centroid (mean shift over a gauge-sized disc).
-  const thr = 0.4 * boxMean(Ir, n, p1.x, p1.y, half);
-  const sm = Math.max(1, Math.round(0.25 * ppm));
-  const reachPx = 3.4 * ppm;
-  let hx = p1.x;
-  let hy = p1.y;
-  let area = 0;
-  for (let iter = 0; iter < 6; iter++) {
-    let sx = 0;
-    let sy = 0;
-    area = 0;
-    for (let y = Math.max(0, Math.floor(hy - reachPx)); y <= Math.min(n - 1, hy + reachPx); y++) {
-      for (let x = Math.max(0, Math.floor(hx - reachPx)); x <= Math.min(n - 1, hx + reachPx); x++) {
-        if (Math.hypot(x - hx, y - hy) > reachPx || boxMean(Ir, n, x, y, sm) <= thr) continue;
-        sx += x;
-        sy += y;
-        area++;
-      }
-    }
-    if (!area) return [null];
-    hx = sx / area;
-    hy = sy / area;
-  }
-  const eqDia = (2 * Math.sqrt(area / Math.PI)) / ppm;
-  const sure = p1.v >= 0.2 && ratio >= 3 && eqDia > 3.5 && eqDia < 7.5;
-  return [toShot(hx, hy, sure ? 'high' : 'low')];
-}
-
-// The connected hole-coloured region around a peak, described by its centroid,
-// long axis, and its length and width along and across that axis (px).
-function blobAt(search, p) {
-  const { n, ppm, Ir, Ie, thin, half } = search;
-  const win = Math.round(9 * ppm);
+// The connected region around (px, py) where the image behind integral `I`
+// (m px square, s px per mm), lightly smoothed, exceeds thr. Described by its
+// centroid, long axis, and length and width along and across that axis (mm).
+// `pad` (mm) is added back all round to undo an earlier erosion.
+function blobIn(I, m, s, px, py, thr, pad) {
+  const win = Math.round(9 * s);
   const size = 2 * win + 1;
-  const thr = 0.4 * boxMean(Ir, n, p.x, p.y, half);
-  // Outlined on the eroded image so that printed numerals do not join on.
-  // Erosion trims the same margin all round, which is added back below.
-  const sm = Math.max(1, Math.round(0.25 * ppm));
-  const mask = new Uint8Array(size * size).fill(255);
+  const sm = Math.max(1, Math.round(0.25 * s));
+  const mask = new Uint8Array(size * size);
   for (let j = 0; j < size; j++) {
     for (let i = 0; i < size; i++) {
-      const x = p.x - win + i;
-      const y = p.y - win + j;
-      if (x >= 0 && y >= 0 && x < n && y < n && boxMean(Ie, n, x, y, sm) > thr) mask[j * size + i] = 0;
+      const x = px - win + i;
+      const y = py - win + j;
+      if (x >= 0 && y >= 0 && x < m && y < m && boxMean(I, m, x, y, sm) > thr) mask[j * size + i] = 1;
     }
   }
-  // The component containing (or nearest to) the peak.
-  const seen = new Uint8Array(size * size);
+  // The component containing (or nearest to) the starting point.
   let seed = -1;
-  for (let rad = 0; rad <= 2 * ppm && seed < 0; rad++) {
+  for (let rad = 0; rad <= Math.round(2 * s) && seed < 0; rad++) {
     for (let j = win - rad; j <= win + rad && seed < 0; j++) {
       for (let i = win - rad; i <= win + rad; i++) {
-        if (!mask[j * size + i]) {
+        if (mask[j * size + i]) {
           seed = j * size + i;
           break;
         }
@@ -705,7 +737,7 @@ function blobAt(search, p) {
   }
   if (seed < 0) return null;
   const stack = [seed];
-  seen[seed] = 1;
+  mask[seed] = 2;
   const xs = [];
   const ys = [];
   while (stack.length) {
@@ -719,19 +751,19 @@ function blobAt(search, p) {
       const ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
       const o = ny * size + nx;
-      if (!seen[o] && !mask[o]) {
-        seen[o] = 1;
+      if (mask[o] === 1) {
+        mask[o] = 2;
         stack.push(o);
       }
     }
   }
-  const m = xs.length;
-  const cx = xs.reduce((a, b) => a + b, 0) / m;
-  const cy = ys.reduce((a, b) => a + b, 0) / m;
+  const count = xs.length;
+  const cx = xs.reduce((a, b) => a + b, 0) / count;
+  const cy = ys.reduce((a, b) => a + b, 0) / count;
   let sxx = 0;
   let sxy = 0;
   let syy = 0;
-  for (let i = 0; i < m; i++) {
+  for (let i = 0; i < count; i++) {
     sxx += (xs[i] - cx) ** 2;
     sxy += (xs[i] - cx) * (ys[i] - cy);
     syy += (ys[i] - cy) ** 2;
@@ -739,59 +771,218 @@ function blobAt(search, p) {
   const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
   const ax = Math.cos(ang);
   const ay = Math.sin(ang);
-  const along = new Float32Array(m);
-  const across = new Float32Array(m);
-  for (let i = 0; i < m; i++) {
+  const along = new Float32Array(count);
+  const across = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
     along[i] = (xs[i] - cx) * ax + (ys[i] - cy) * ay;
     across[i] = (ys[i] - cy) * ax - (xs[i] - cx) * ay;
   }
   // Trimmed extents, so a stray whisker of torn paper does not stretch them.
   const span = (a) => {
     a.sort();
-    return a[Math.floor(0.985 * (m - 1))] - a[Math.floor(0.015 * (m - 1))];
+    return a[Math.floor(0.985 * (count - 1))] - a[Math.floor(0.015 * (count - 1))];
   };
-  return { x: p.x - win + cx, y: p.y - win + cy, ax, ay, length: span(along) + 2 * thin, width: span(across) + 2 * thin };
+  return {
+    x: px - win + cx,
+    y: py - win + cy,
+    ax,
+    ay,
+    length: span(along) / s + 2 * pad,
+    width: span(across) / s + 2 * pad,
+    area: count / (s * s),
+  };
+}
+
+// Dev pages read the latest disturbed-paper map from here.
+export const probe = { map: null };
+
+// Finds hole candidates in a patch, strongest first.
+//
+// A real hole shows in two ways. The paper around it is disturbed: torn
+// fibres, a rim, and whatever shows through, none of which belong on a clean
+// diagram. And the opening itself is a solid patch either lighter than the
+// black (light surface behind the card) or darker than it (dark surface).
+function findHoles(patch, card, want) {
+  const { n, ppm } = patch;
+  const c = (n - 1) / 2;
+  const markR = card.aimingMarkDia / 2;
+  const { D, signed } = residualMap(patch, card);
+
+  // Disturbed paper, at half resolution: grow to join a broken rim into a
+  // solid patch, then shrink by more, which removes anything smaller than a
+  // hole (numerals, ring slivers, pen strokes) and leaves a hole's core.
+  const h = n >> 1;
+  const q = ppm / 2;
+  const half = new Float32Array(h * h);
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < h; i++) {
+      const o = 2 * j * n + 2 * i;
+      half[j * h + i] = Math.max(D[o], D[o + 1], D[o + n], D[o + n + 1]);
+    }
+  }
+  const grow = Math.round(1.2 * q);
+  const shrink = Math.round(2.1 * q);
+  const G = erode(dilate(half, h, grow), h, shrink);
+  probe.map = { G, h, D: half };
+  const Ig = integral(G, h);
+
+  // The hole itself, light or dark: how far each pixel is from expected,
+  // plain (to settle on a centre) and with thin features eroded away (to
+  // outline its shape without numerals joining on).
+  const thin = Math.round(0.45 * ppm);
+  const mag = signed.map(Math.abs);
+  const Ir = integral(mag, n);
+  const Ie = integral(erode(mag, n, thin), n);
+
+  const box = Math.max(1, Math.round(1.2 * q));
+  const reach = (card.searchR - 2) * ppm;
+  // Strongest response, keeping clear of the `avoid` circles ({x, y, r} in patch px).
+  const peak = (avoid) => {
+    let best = { v: 0, x: 0, y: 0 };
+    for (let j = box; j < h - box; j++) {
+      for (let i = box; i < h - box; i++) {
+        const x = 2 * i + 0.5;
+        const y = 2 * j + 0.5;
+        if (Math.hypot(x - c, y - c) > reach) continue;
+        if (avoid.some((a) => Math.hypot(x - a.x, y - a.y) < a.r)) continue;
+        const v = boxMean(Ig, h, i, j, box);
+        if (v > best.v) best = { v, x, y };
+      }
+    }
+    return best;
+  };
+
+  // Brightest spot of a polarity image near a point.
+  const nearby = (I, p) => {
+    const step = Math.max(1, Math.round(0.3 * ppm));
+    const span = Math.round(2 * ppm);
+    const sm = Math.round(0.5 * ppm);
+    let best = { v: 0, x: Math.round(p.x), y: Math.round(p.y) };
+    for (let y = Math.round(p.y) - span; y <= p.y + span; y += step) {
+      for (let x = Math.round(p.x) - span; x <= p.x + span; x += step) {
+        if (x < 0 || y < 0 || x >= n || y >= n) continue;
+        const v = boxMean(I, n, x, y, sm);
+        if (v > best.v) best = { v, x, y };
+      }
+    }
+    return best;
+  };
+
+  // Centroid of the off-colour pixels within a gauge-sized disc, repeated
+  // until it stops moving.
+  const settle = (x0, y0) => {
+    const thr = 0.4 * boxMean(Ir, n, Math.round(x0), Math.round(y0), Math.round(ppm));
+    const sm = Math.max(1, Math.round(0.25 * ppm));
+    const span = 3.4 * ppm;
+    let hx = x0;
+    let hy = y0;
+    for (let iter = 0; iter < 6; iter++) {
+      let sx = 0;
+      let sy = 0;
+      let area = 0;
+      for (let y = Math.max(0, Math.floor(hy - span)); y <= Math.min(n - 1, hy + span); y++) {
+        for (let x = Math.max(0, Math.floor(hx - span)); x <= Math.min(n - 1, hx + span); x++) {
+          if (Math.hypot(x - hx, y - hy) > span || boxMean(Ir, n, x, y, sm) <= thr) continue;
+          sx += x;
+          sy += y;
+          area++;
+        }
+      }
+      if (!area) return { x: x0, y: y0 };
+      hx = sx / area;
+      hy = sy / area;
+    }
+    return { x: hx, y: hy };
+  };
+
+  const describe = (p) => {
+    const found = blobIn(Ig, h, q, Math.round((p.x - 0.5) / 2), Math.round((p.y - 0.5) / 2), 0.4 * p.v, (shrink - grow) / q);
+    if (!found) return null;
+    const disturbed = { ...found, x: 2 * found.x + 0.5, y: 2 * found.y + 0.5 };
+    const spot = nearby(Ie, p);
+    let outline = spot.v > 0.04 ? blobIn(Ie, n, ppm, spot.x, spot.y, 0.4 * spot.v, thin / ppm) : null;
+    if (outline && outline.area < 2) outline = null;
+    const shape = outline ?? disturbed;
+    const centre = settle(shape.x, shape.y);
+    return {
+      v: p.v,
+      x: centre.x,
+      y: centre.y,
+      // Middle and long axis of the whole shape, for splitting an overlapping pair.
+      mx: shape.x,
+      my: shape.y,
+      ax: shape.ax,
+      ay: shape.ay,
+      gap: shape.length - shape.width,
+      // The two views of the hole agree on where it is.
+      agree: Math.hypot(centre.x - disturbed.x, centre.y - disturbed.y) / ppm < 0.8,
+      round: shape.width > 2.5 && shape.width < 7.5,
+      holeLike: !!outline && disturbed.width > 2.5 && disturbed.width < 8 && disturbed.length < 14,
+      spread: shape.length,
+    };
+  };
+
+  // Anything inside the black is taken at face value. Outside it there may be
+  // handwriting, labels and scorers' marks, so only hole-shaped things count.
+  const holes = [];
+  const avoid = [];
+  for (let k = 0; k < 10 && holes.filter((d) => d.inside).length < want; k++) {
+    const p = peak(avoid);
+    if (p.v < 0.05) break;
+    const d = describe(p);
+    if (!d) {
+      avoid.push({ x: p.x, y: p.y, r: 4 * ppm });
+      continue;
+    }
+    avoid.push({ x: d.x, y: d.y, r: (d.spread / 2 + 2.2) * ppm });
+    d.inside = Math.hypot(d.x - c, d.y - c) <= (markR + 1) * ppm;
+    if (d.inside || d.holeLike) holes.push(d);
+  }
+  // Holes in the black come first: something outside it never outranks them.
+  holes.sort((p, q) => q.inside - p.inside || q.v - p.v);
+  const toShot = (x, y, sure) => ({ x: (x - c) / ppm, y: -(y - c) / ppm, confidence: sure ? 'high' : 'low' });
+  return { holes, toShot, ppm };
+}
+
+// One shot per diagram: the one hole that stands out from anything else.
+function detectShot(patch, card) {
+  const { holes, toShot } = findHoles(patch, card, 2);
+  const a = holes[0];
+  // Only something in the same zone (in or out of the black) is a rival.
+  const b = holes[1]?.inside === a?.inside ? holes[1] : null;
+  if (!a || a.v < 0.08 || (b && a.v < 1.6 * b.v)) return [null];
+  const sure = a.agree && a.round && a.v >= 0.2 && (!b || a.v >= 3 * b.v);
+  return [toShot(a.x, a.y, sure)];
 }
 
 // Two shots per diagram. They often overlap into one elongated hole: two
 // equal circles a distance d apart make a shape that is d longer than it is
 // wide, with the centres d/2 either side of its centroid along the long axis.
 function detectPair(patch, card) {
-  const search = shotSearch(patch, card);
-  const { ppm, peak, toShot } = search;
-  const p1 = peak();
-  if (p1.v < 0.08) return [null, null];
-  const b1 = blobAt(search, p1);
-  if (!b1) return [null, null];
-  const gap = (b1.length - b1.width) / ppm;
-  const round = (b) => b.width / ppm > 3.5 && b.width / ppm < 7.5;
-  const p2 = peak([{ x: b1.x, y: b1.y, r: b1.length / 2 + 2.2 * ppm }]);
-  const noise = peak([{ x: b1.x, y: b1.y, r: b1.length / 2 + 4 * ppm }, { x: p2.x, y: p2.y, r: 7 * ppm }]);
-  if (p1.v < 1.6 * noise.v) return [null, null];
-  const strong = (p) => p.v >= 0.2 && p.v >= 3 * noise.v;
+  const { holes, toShot, ppm } = findHoles(patch, card, 3);
+  const [a, b] = holes;
+  const other = holes[2]?.inside ? holes[2] : null;
+  if (!a || a.v < 0.08 || (other && a.v < 1.6 * other.v)) return [null, null];
+  const strong = (k) => k.agree && k.round && k.v >= 0.2 && (!other || k.v >= 3 * other.v);
 
   // A second, separate hole.
-  if (p2.v >= 0.08 && p2.v >= 1.6 * noise.v && p2.v >= 0.3 * p1.v) {
-    const b2 = blobAt(search, p2);
-    const first = toShot(b1.x, b1.y, round(b1) && gap < 1 && strong(p1) ? 'high' : 'low');
-    if (!b2) return [first, null];
-    const gap2 = (b2.length - b2.width) / ppm;
-    return [first, toShot(b2.x, b2.y, round(b2) && gap2 < 1 && strong(p2) ? 'high' : 'low')];
+  if (b && b.v >= 0.08 && b.v >= 0.3 * a.v && (!other || b.v >= 1.6 * other.v)) {
+    return [toShot(a.x, a.y, a.gap < 1 && strong(a)), toShot(b.x, b.y, b.gap < 1 && strong(b))];
   }
 
   // One elongated hole: the two shots overlap.
-  if (gap >= 1) {
-    const sure = gap >= 2.5 && round(b1) && strong(p1);
-    const h = (gap * ppm) / 2;
+  if (a.gap >= 1) {
+    const sure = a.gap >= 2.5 && strong(a);
+    const half = (a.gap * ppm) / 2;
     return [
-      toShot(b1.x - b1.ax * h, b1.y - b1.ay * h, sure ? 'high' : 'low'),
-      toShot(b1.x + b1.ax * h, b1.y + b1.ay * h, sure ? 'high' : 'low'),
+      toShot(a.mx - a.ax * half, a.my - a.ay * half, sure),
+      toShot(a.mx + a.ax * half, a.my + a.ay * half, sure),
     ];
   }
 
   // A single round hole: the other shot missed the diagram or went through
   // the same hole, which a photo cannot tell apart, so it is left unplaced.
-  return [toShot(b1.x, b1.y, round(b1) && strong(p1) ? 'high' : 'low'), null];
+  return [toShot(a.x, a.y, strong(a)), null];
 }
 
 // ---------- top level ----------
@@ -865,17 +1056,31 @@ async function scanAs(img, card, onProgress, debug) {
     const d = layout[i];
     onProgress(`Scoring diagram ${i + 1} of ${count}`);
     await tick();
-    const fit = fitMark(extractPatch(img, H, d.x, d.y, 64, 6), markR);
-    const scale = fit ? fit.r / markR : 1;
+    // Measure the mark, then measure again on the corrected patch: the second
+    // pass picks up what the first could not see through the distortion.
+    let fit = fitMark(extractPatch(img, H, d.x, d.y, 64, 6), markR);
+    if (fit) {
+      const again = fitMark(extractPatch(img, H, d.x + fit.ox, d.y + fit.oy, 64, 6, fit.T), markR);
+      if (again) {
+        const [a, b, c, e] = fit.T;
+        const [p, q, r, t] = again.T;
+        fit = {
+          ...fit,
+          ox: fit.ox + a * again.ox + b * again.oy,
+          oy: fit.oy + c * again.ox + e * again.oy,
+          T: [a * p + b * r, a * q + b * t, c * p + e * r, c * q + e * t],
+        };
+      }
+    }
     const patch = extractPatch(
-      img, H, d.x + (fit ? fit.ox : 0), d.y + (fit ? fit.oy : 0), card.patchMm, PATCH_PPM, scale, true
+      img, H, d.x + (fit ? fit.ox : 0), d.y + (fit ? fit.oy : 0), card.patchMm, PATCH_PPM, fit?.T, true
     );
     const shots = (card.shotsPerDiagram === 2 ? detectPair : detectShot)(patch, card);
     diagrams.push({
       image: patchToDataUrl(patch, 608),
       aligned: !!fit,
       shots: shots.map((s) => s && { x: round2(s.x), y: round2(s.y), source: 'auto', confidence: s.confidence }),
-      ...(debug ? { patch, fit } : {}),
+      ...(debug ? { patch, fit, map: probe.map } : {}),
     });
   }
   return { type: card.id, diagrams, flipped, pixelsPerMm: meanR / markR, size: { w: img.w, h: img.h } };

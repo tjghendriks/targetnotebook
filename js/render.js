@@ -1,7 +1,7 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { scoreShot } from './model.js';
+import { scoreShot, isShot, isMiss } from './model.js';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';
@@ -39,12 +39,14 @@ export function cardSvg(rec, card, settings, order) {
   const diagrams = card.diagrams
     .map((d, i) => {
       const shots = rec.shots.slice(i * per, i * per + per);
-      const placed = shots.filter(Boolean);
-      const scores = placed.map((s) => scoreShot(s.x, s.y, card, settings));
-      const check = placed.length < per || placed.some(unsure);
-      const label = placed.length ? scores.join(' ') + (placed.length < per ? ' ?' : '') : '?';
+      const placed = shots.filter(isShot);
+      const open = shots.filter((s) => !isShot(s) && !isMiss(s)).length;
+      const check = open > 0 || placed.some(unsure);
+      // One value per shot: its score, 0 for a confirmed miss, ? if still to be accounted for.
+      const label = shots.map((s) => (isShot(s) ? scoreShot(s.x, s.y, card, settings) : isMiss(s) ? 0 : '?')).join(' ');
       return `<g class="dg" data-d="${i}" transform="translate(${d.x} ${d.y})" role="button" aria-label="Diagram ${order.indexOf(i) + 1}">
         <rect x="${-reach - 8}" y="${-reach - 6}" width="${2 * reach + 16}" height="${2 * reach + 12}" fill="transparent"/>
+        ${open ? `<circle class="needs" r="${f(reach + 3)}"/>` : ''}
         ${diagramMarkup(card)}
         ${placed.map((s) => shotMarkup(s, settings)).join('')}
         <text class="dnum" x="${f(-reach * 0.92)}" y="${f(-reach * 0.8)}">${order.indexOf(i) + 1}</text>
@@ -74,23 +76,23 @@ export function groupSvg(card, shots, stats, settings) {
   </svg>`;
 }
 
-// The card layout with each diagram showing when it is shot. `order` may be
-// partly filled while a custom order is being tapped in.
+// The card, in its own colours, with each aiming mark showing when it is
+// shot. `order` may be partly filled while a custom order is being tapped in.
 export function orderSvg(card, order) {
   const W = card.width;
   const H = card.height;
   const at = (p) => card.diagrams[p];
-  const r = card.diagrams.length > 5 ? 27 : 32;
+  const r = card.aimingMarkDia / 2 + 3;
   const path = order.map((p, i) => `${i ? 'L' : 'M'}${at(p).x} ${at(p).y}`).join('');
   const spots = card.diagrams
     .map((d, p) => {
       const k = order.indexOf(p);
       return `<g class="op ${k < 0 ? 'empty' : ''}" data-p="${p}" transform="translate(${d.x} ${d.y})">
-        <circle r="${r}"/><text y="1">${k < 0 ? '' : k + 1}</text></g>`;
+        <circle r="${f(r)}"/><text y="1.5">${k < 0 ? '' : k + 1}</text></g>`;
     })
     .join('');
   return `<svg class="order-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-    <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" rx="14" class="order-bg"/>
+    <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" rx="10" fill="${PAPER}"/>
     <path d="${path}" class="order-path"/>${spots}
   </svg>`;
 }

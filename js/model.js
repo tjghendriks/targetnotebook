@@ -152,12 +152,19 @@ export function scoreShot(x, y, card, settings = DEFAULT_SETTINGS) {
   return 0;
 }
 
+// Each entry in a card's `shots` is one of: a placed shot { x, y, ... }, a
+// confirmed miss { miss: true } (no hole on the diagram, scores 0), or null
+// (not yet accounted for: undetected and not confirmed either way).
 export const isShot = (s) => !!s && Number.isFinite(s.x) && Number.isFinite(s.y);
+export const isMiss = (s) => !!s?.miss;
 export const cardShots = (rec) => rec.shots.filter(isShot);
+export const shotValue = (s, card, settings) => (isShot(s) ? scoreShot(s.x, s.y, card, settings) : 0);
+// Shots still to be placed or confirmed as misses. A card has no total until this is 0.
+export const unaccounted = (rec) => rec.shots.filter((s) => !isShot(s) && !isMiss(s)).length;
 
 export function cardTotal(rec, settings) {
   const card = cardType(rec);
-  return cardShots(rec).reduce((t, s) => t + scoreShot(s.x, s.y, card, settings), 0);
+  return rec.shots.reduce((t, s) => t + shotValue(s, card, settings), 0);
 }
 
 export function groupStats(shots) {
