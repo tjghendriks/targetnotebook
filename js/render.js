@@ -27,7 +27,8 @@ export function shotMarkup(shot, settings, cls = '') {
   return `<circle class="shot ${unsure ? 'unsure' : ''} ${cls}" cx="${f(shot.x)}" cy="${f(-shot.y)}" r="${f(settings.gaugeDia / 2)}"/>`;
 }
 
-export function cardSvg(card, settings) {
+// `order` is the firing order; each diagram is labelled with its shot number.
+export function cardSvg(card, settings, order) {
   const W = CARD.width;
   const H = CARD.height;
   const diagrams = CARD.diagrams
@@ -39,7 +40,7 @@ export function cardSvg(card, settings) {
         <rect x="-36" y="-34" width="72" height="68" fill="transparent"/>
         ${diagramMarkup()}
         ${shot ? shotMarkup(shot, settings) : ''}
-        <text class="dnum" x="-27" y="-22">${d.n}</text>
+        <text class="dnum" x="-27" y="-22">${order.indexOf(i) + 1}</text>
         <text class="dscore ${!shot || unsure ? 'check' : ''}" x="27" y="-19">${shot ? score : '?'}</text>
       </g>`;
     })
@@ -64,6 +65,45 @@ export function groupSvg(shots, stats, settings) {
     <rect x="${-reach}" y="${-reach}" width="${2 * reach}" height="${2 * reach}" fill="${PAPER}"/>
     ${diagramMarkup()}${marks}${mpi}
   </svg>`;
+}
+
+// The card layout with each diagram showing when it is shot. `order` may be
+// partly filled while a custom order is being tapped in.
+export function orderSvg(order) {
+  const W = CARD.width;
+  const H = CARD.height;
+  const at = (p) => CARD.diagrams[p];
+  const path = order.map((p, i) => `${i ? 'L' : 'M'}${at(p).x} ${at(p).y}`).join('');
+  const spots = CARD.diagrams
+    .map((d, p) => {
+      const k = order.indexOf(p);
+      return `<g class="op ${k < 0 ? 'empty' : ''}" data-p="${p}" transform="translate(${d.x} ${d.y})">
+        <circle r="27"/><text y="1">${k < 0 ? '' : k + 1}</text></g>`;
+    })
+    .join('');
+  return `<svg class="order-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" rx="14" class="order-bg"/>
+    <path d="${path}" class="order-path"/>${spots}
+  </svg>`;
+}
+
+// Average score for each shot number (1st shot fired, 2nd, ...). null = no data.
+export function shotNumberSvg(values) {
+  const W = 320;
+  const H = 130;
+  const known = values.filter((v) => v !== null);
+  const lo = Math.max(0, Math.floor(Math.min(...known) - 1));
+  const slot = W / values.length;
+  const bars = values
+    .map((v, i) => {
+      const x = i * slot + 5;
+      const h = v === null ? 0 : Math.max(3, ((v - lo) / (10 - lo)) * (H - 40));
+      return `${v === null ? '' : `<rect x="${f(x)}" y="${f(H - 20 - h)}" width="${f(slot - 10)}" height="${f(h)}" rx="5" class="bar-fill"/>
+        <text x="${f(x + (slot - 10) / 2)}" y="${f(H - 25 - h)}" class="axis" text-anchor="middle">${v.toFixed(1)}</text>`}
+        <text x="${f(x + (slot - 10) / 2)}" y="${H - 5}" class="axis" text-anchor="middle">${i + 1}</text>`;
+    })
+    .join('');
+  return `<svg class="trend-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">${bars}</svg>`;
 }
 
 // points: [{label, value}] in date order.

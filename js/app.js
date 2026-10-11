@@ -1,7 +1,10 @@
-import { CARD, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM } from './model.js';
+import {
+  CARD, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
+  ORDER_METHODS, isOrder, resolveOrder, cardOrder,
+} from './model.js';
 import * as store from './store.js';
 import { scanCard, ScanError, PATCH_MM } from './detect.js';
-import { cardSvg, groupSvg, trendSvg } from './render.js';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg } from './render.js';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -50,11 +53,13 @@ function download(filename, text, type) {
 
 function csvFor(cards) {
   const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
-  const rows = ['card_id,date,name,diagram,x_mm,y_mm,score,placed_by'];
+  // shot = order fired; diagram = position on the card, reading left to right, top to bottom.
+  const rows = ['card_id,date,name,shot,diagram,x_mm,y_mm,score,placed_by'];
   for (const c of cards) {
-    c.shots.forEach((s, i) => {
+    cardOrder(c, settings).forEach((p, k) => {
+      const s = c.shots[p];
       if (!s) return;
-      rows.push([c.id, c.date, q(c.name), i + 1, s.x.toFixed(2), s.y.toFixed(2), scoreShot(s.x, s.y, settings), s.source].join(','));
+      rows.push([c.id, c.date, q(c.name), k + 1, p + 1, s.x.toFixed(2), s.y.toFixed(2), scoreShot(s.x, s.y, settings), s.source].join(','));
     });
   }
   return rows.join('\n') + '\n';
@@ -82,6 +87,63 @@ function statsBlock(shots) {
       <p class="muted">The group centre is ${Math.abs(st.mx).toFixed(1)} mm ${st.mx >= 0 ? 'right' : 'left'} and ${Math.abs(st.my).toFixed(1)} mm ${st.my >= 0 ? 'high' : 'low'}.
       One click moves the shot ${corr.clickMm.toFixed(2)} mm at 25 yards. Directions say which way the shots need to move.</p>
     </div>`;
+}
+
+// A firing-order chooser: method, mirror option, and tap-to-number for a custom
+// order. Calls onChange with a new spec whenever a complete order is chosen.
+function mountOrderPicker(el, spec, onChange) {
+  spec = { method: 'clockwise', mirror: false, custom: null, ...spec };
+  let taps = null; // partly entered custom order
+  const draw = () => {
+    const custom = spec.method === 'custom';
+    const order = taps ?? resolveOrder(spec);
+    el.innerHTML = `
+      <div class="row">
+        <label class="field">Order<select data-o="method">
+          ${Object.entries(ORDER_METHODS).map(([k, m]) => `<option value="${k}" ${spec.method === k ? 'selected' : ''}>${m.label}</option>`).join('')}
+          <option value="custom" ${custom ? 'selected' : ''}>Custom</option>
+        </select></label>
+        ${custom
+          ? '<button data-o="clear">Clear and re-enter</button>'
+          : `<label class="check"><input type="checkbox" data-o="mirror" ${spec.mirror ? 'checked' : ''}> Mirror image (left-handed)</label>`}
+      </div>
+      ${orderSvg(order)}
+      <p class="muted">${taps
+        ? `Tap the diagrams in the order they are shot. ${10 - taps.length} to go.`
+        : custom ? 'Custom order. Use Clear and re-enter to change it.' : 'Numbers show the order the diagrams are shot.'}</p>`;
+    el.querySelector('[data-o=method]').addEventListener('change', (e) => {
+      const method = e.target.value;
+      // Start a custom order from whatever was showing, so it is valid straight away.
+      const seed = method === 'custom' && !isOrder(spec.custom) ? resolveOrder(spec) : spec.custom;
+      spec = { ...spec, method, custom: seed };
+      taps = null;
+      onChange(spec);
+      draw();
+    });
+    el.querySelector('[data-o=mirror]')?.addEventListener('change', (e) => {
+      spec = { ...spec, mirror: e.target.checked };
+      onChange(spec);
+      draw();
+    });
+    el.querySelector('[data-o=clear]')?.addEventListener('click', () => {
+      taps = [];
+      draw();
+    });
+    if (taps) {
+      el.querySelectorAll('.op').forEach((g) => g.addEventListener('click', () => {
+        const p = Number(g.dataset.p);
+        if (taps.includes(p)) return;
+        taps.push(p);
+        if (taps.length === 10) {
+          spec = { ...spec, custom: taps };
+          taps = null;
+          onChange(spec);
+        }
+        draw();
+      }));
+    }
+  };
+  draw();
 }
 
 // ---------- cards list ----------
@@ -128,6 +190,7 @@ async function scan(file) {
       createdAt: new Date().toISOString(),
       shots: result.diagrams.map((d) => d.shot),
       images: result.diagrams.map((d) => d.image),
+      orderSpec: structuredClone(settings.shotOrder),
     };
     dirty = true;
     busy(null);
@@ -155,18 +218,19 @@ async function showCard(id) {
 
 function renderCard() {
   const card = current;
+  const order = cardOrder(card, settings);
   const shots = cardShots(card);
   const missing = 10 - shots.length;
   const unsure = card.shots.filter((s) => s && s.source === 'auto' && s.confidence !== 'high').length;
   const notes = [];
   if (missing) notes.push(`${missing} diagram${missing === 1 ? ' has' : 's have'} no shot marked. Tap a diagram to place it.`);
-  if (unsure) notes.push(`${unsure} shot${unsure === 1 ? '' : 's'} (orange) should be checked. Tap to confirm or adjust.`);
+  if (unsure) notes.push(`${unsure} shot${unsure === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.`);
   view.innerHTML = `
     <div class="panel">
-      ${cardSvg(card, settings)}
+      ${cardSvg(card, settings, order)}
       <div class="score-line"><span class="big">${cardTotal(card, settings)}</span><span class="of">/ 100${missing ? ` (${shots.length} shots)` : ''}</span></div>
       ${notes.map((n) => `<p class="notice">${n}</p>`).join('')}
-      <p class="muted">Tap any diagram to check the shot against the photo and move it if needed.</p>
+      <p class="muted">Tap any diagram to check the shot against the photo and move it if needed. The small numbers are the order fired.</p>
       <div class="row">
         <label class="field">Date<input id="f-date" type="date" value="${esc(card.date)}"></label>
         <label class="field">Competition / session<input id="f-name" type="text" maxlength="80" placeholder="e.g. Winter league round 3" value="${esc(card.name)}"></label>
@@ -179,13 +243,18 @@ function renderCard() {
     <h2>Shots</h2>
     <div class="panel">
       <table>
-        <tr><th>Diagram</th><th>Score</th><th>X mm</th><th>Y mm</th><th>From centre</th></tr>
-        ${card.shots.map((s, i) => s
-          ? `<tr><td>${i + 1}</td><td><b>${scoreShot(s.x, s.y, settings)}</b></td><td>${mm(s.x)}</td><td>${mm(s.y)}</td><td>${Math.hypot(s.x, s.y).toFixed(1)}</td></tr>`
-          : `<tr><td>${i + 1}</td><td colspan="4" class="muted">not marked</td></tr>`).join('')}
+        <tr><th>Shot</th><th>Score</th><th>X mm</th><th>Y mm</th><th>From centre</th></tr>
+        ${order.map((p, k) => {
+          const s = card.shots[p];
+          return s
+            ? `<tr><td>${k + 1}</td><td><b>${scoreShot(s.x, s.y, settings)}</b></td><td>${mm(s.x)}</td><td>${mm(s.y)}</td><td>${Math.hypot(s.x, s.y).toFixed(1)}</td></tr>`
+            : `<tr><td>${k + 1}</td><td colspan="4" class="muted">not marked</td></tr>`;
+        }).join('')}
       </table>
-      <p class="muted">X is right of centre, Y is above centre.</p>
+      <p class="muted">In the order fired. X is right of centre, Y is above centre.</p>
     </div>
+    <h2>Shot order for this card</h2>
+    <div class="panel" id="card-order"></div>
     <h2>Group</h2>
     <div class="panel">${statsBlock(shots)}</div>
     <div class="row">
@@ -211,8 +280,15 @@ function renderCard() {
     dirty = false;
     location.hash = '#/';
   });
+  mountOrderPicker($('#card-order'), card.orderSpec ?? settings.shotOrder, (spec) => {
+    card.orderSpec = spec;
+    dirty = true;
+    const y = window.scrollY;
+    renderCard();
+    window.scrollTo(0, y);
+  });
   $('#flip').addEventListener('click', flipCard);
-  $('#csv').addEventListener('click', () => download(`targetscan-${card.date}.csv`, csvFor([card]), 'text/csv'));
+  $('#csv').addEventListener('click', () => download(`targetnotebook-${card.date}.csv`, csvFor([card]), 'text/csv'));
 }
 
 async function saveCard() {
@@ -253,6 +329,7 @@ async function flipCard() {
 function openEditor(index) {
   const el = $('#editor');
   const half = PATCH_MM / 2;
+  const order = cardOrder(current, settings);
   let zoom = 1;
   let drag = null;
 
@@ -264,13 +341,13 @@ function openEditor(index) {
     const g = settings.gaugeDia / 2;
     el.innerHTML = `<div class="ed">
       <div class="ed-head">
-        <div><small>Diagram ${index + 1} of 10</small><span class="ed-score" id="ed-score">${shot ? score : '–'}</span></div>
+        <div><small>Shot ${order.indexOf(index) + 1} of 10</small><span class="ed-score" id="ed-score">${shot ? score : '–'}</span></div>
         <div style="text-align:right"><small id="ed-pos">${shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm` : 'No shot marked'}</small>
           <small>${shot ? (shot.source === 'auto' ? `Detected${shot.confidence === 'high' ? '' : ', please check'}` : 'Placed by hand') : 'Tap the hole to place it'}</small></div>
       </div>
       <div class="stage" id="stage">
         <div class="zoomer" id="zoomer" style="transform:scale(${zoom});transform-origin:${origin}">
-          ${image ? `<img src="${image}" alt="Photo of diagram ${index + 1}">` : ''}
+          ${image ? `<img src="${image}" alt="Photo of the diagram for shot ${order.indexOf(index) + 1}">` : ''}
           <svg viewBox="${-half} ${-half} ${PATCH_MM} ${PATCH_MM}">
             ${image ? '' : `<rect x="${-half}" y="${-half}" width="${PATCH_MM}" height="${PATCH_MM}" fill="#e7caa2"/><circle r="${CARD.aimingMarkDia / 2}" fill="#1f1b19"/>`}
             ${CARD.rings.map((r) => `<circle class="ov-ring" r="${r.dia / 2}"/>`).join('')}
@@ -279,7 +356,7 @@ function openEditor(index) {
           </svg>
         </div>
       </div>
-      <p class="hint">${shot ? 'Drag anywhere to slide the yellow gauge over the hole. Blue lines are the scoring rings.' : 'Tap the centre of the shot hole.'}</p>
+      <p class="hint">${shot ? 'Drag anywhere to slide the blue gauge circle over the hole. The fine pale lines are the scoring rings.' : 'Tap the centre of the shot hole.'}</p>
       <div class="nudge">
         <button data-nx="-0.1" data-ny="0" aria-label="Nudge left">←</button>
         <button data-nx="0" data-ny="0.1" aria-label="Nudge up">↑</button>
@@ -291,8 +368,8 @@ function openEditor(index) {
         <button id="ed-remove" ${shot ? '' : 'disabled'}>Remove shot</button>
       </div>
       <div class="row">
-        <button id="ed-prev" ${index ? '' : 'disabled'}>‹ Previous</button>
-        <button id="ed-next" ${index < 9 ? '' : 'disabled'}>Next ›</button>
+        <button id="ed-prev" ${order.indexOf(index) ? '' : 'disabled'}>‹ Previous</button>
+        <button id="ed-next" ${order.indexOf(index) < 9 ? '' : 'disabled'}>Next ›</button>
         <button id="ed-done" class="primary">Done</button>
       </div>
     </div>`;
@@ -361,7 +438,7 @@ function openEditor(index) {
     });
     const go = (step) => {
       confirmShot();
-      index += step;
+      index = order[order.indexOf(index) + step];
       zoom = 1;
       draw();
     };
@@ -400,6 +477,10 @@ async function showAnalysis() {
   const shots = cards.flatMap(cardShots);
   const full = cards.filter((c) => cardShots(c).length === 10).reverse();
   const totals = full.map((c) => cardTotal(c, settings));
+  const byNumber = Array.from({ length: 10 }, (_, k) => {
+    const scores = cards.map((c) => c.shots[cardOrder(c, settings)[k]]).filter(Boolean).map((s) => scoreShot(s.x, s.y, settings));
+    return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+  });
   const dist = [10, 9, 8, 7, 6, 0].map((v) => ({ v, n: shots.filter((s) => scoreShot(s.x, s.y, settings) === v).length }));
   view.innerHTML = `
     <div class="panel"><div class="row">
@@ -425,6 +506,11 @@ async function showAnalysis() {
         : '<p class="muted">No complete 10-shot cards in this selection.</p>'}
       <table style="margin-top:10px"><tr><th>Shot value</th>${dist.map((d) => `<th>${d.v || 'Outside 6'}</th>`).join('')}</tr>
         <tr><td>Count</td>${dist.map((d) => `<td>${d.n}</td>`).join('')}</tr></table>
+    </div>
+    <h2>Average score by shot number</h2>
+    <div class="panel">
+      ${shots.length ? shotNumberSvg(byNumber) : ''}
+      <p class="muted">First shot fired to last, using each card's shot order.</p>
     </div>
     <h2>Group, all ${shots.length} shots overlaid</h2>
     <div class="panel">${statsBlock(shots)}</div>` : '<p class="muted">No saved cards match this selection.</p>'}`;
@@ -458,6 +544,11 @@ async function showSettings() {
       <label class="field">Clicks per minute of angle<input id="s-clicks" type="number" step="1" min="1" max="20" value="${Math.round(1 / settings.clickMoa)}"></label>
       <p class="muted">One click moves the shot ${(settings.clickMoa * MOA_MM).toFixed(2)} mm at 25 yards.</p>
     </div>
+    <h2>Default shot order</h2>
+    <div class="panel">
+      <div id="s-order"></div>
+      <p class="muted">Used for new scans, and for saved cards that have no order of their own. It can be changed on any individual card.</p>
+    </div>
     <h2>Backup</h2>
     <div class="panel">
       <p class="muted">Everything is stored only in this browser on this device. ${storageNote}</p>
@@ -472,6 +563,7 @@ async function showSettings() {
     const gauge = Number($('#s-gauge').value);
     const clicks = Number($('#s-clicks').value);
     settings = {
+      ...settings,
       gauging: $('#s-gauging').value,
       gaugeDia: gauge >= 4 && gauge <= 7 ? gauge : settings.gaugeDia,
       clickMoa: clicks >= 1 && clicks <= 20 ? 1 / clicks : settings.clickMoa,
@@ -480,13 +572,17 @@ async function showSettings() {
     showSettings();
   };
   for (const id of ['s-gauging', 's-gauge', 's-clicks']) $(`#${id}`).addEventListener('change', save);
+  mountOrderPicker($('#s-order'), settings.shotOrder, async (spec) => {
+    settings = { ...settings, shotOrder: spec };
+    await store.putSettings(settings);
+  });
   const stamp = today();
   $('#x-full').addEventListener('click', async () =>
-    download(`targetscan-backup-${stamp}.json`, JSON.stringify(await store.exportData({ images: true })), 'application/json'));
+    download(`targetnotebook-backup-${stamp}.json`, JSON.stringify(await store.exportData({ images: true })), 'application/json'));
   $('#x-data').addEventListener('click', async () =>
-    download(`targetscan-data-${stamp}.json`, JSON.stringify(await store.exportData({ images: false }), null, 1), 'application/json'));
+    download(`targetnotebook-data-${stamp}.json`, JSON.stringify(await store.exportData({ images: false }), null, 1), 'application/json'));
   $('#x-csv').addEventListener('click', async () =>
-    download(`targetscan-shots-${stamp}.csv`, csvFor(await store.listCards()), 'text/csv'));
+    download(`targetnotebook-shots-${stamp}.csv`, csvFor(await store.listCards()), 'text/csv'));
   $('#x-import').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
