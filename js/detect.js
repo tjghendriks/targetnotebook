@@ -4,7 +4,7 @@
 // of the aiming mark, then look for the one region that breaks the diagram's
 // radial symmetry (the shot hole).
 
-import { CARDS } from './model.js?v=2026.10.12-11';
+import { CARDS } from './model.js?v=2026.10.12-14';
 
 export class ScanError extends Error {}
 
