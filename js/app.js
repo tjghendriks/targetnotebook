@@ -1,14 +1,14 @@
 import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
-  isShot, isMiss, shotValue, unaccounted,
+  isShot, isMiss, shotValue, shotValues, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.11-13';
-import * as store from './store.js?v=2026.10.11-13';
-import { scanCard, ScanError } from './detect.js?v=2026.10.11-13';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.11-13';
+} from './model.js?v=2026.10.12-11';
+import * as store from './store.js?v=2026.10.12-11';
+import { scanCard, ScanError } from './detect.js?v=2026.10.12-11';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-11';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.11-13';
+const VERSION = '2026.10.12-11';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -22,6 +22,10 @@ const today = () => {
 const niceDate = (iso) => {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+};
+const longDate = (iso) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 };
 const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high';
 
@@ -173,34 +177,182 @@ function mountOrderPicker(el, card, spec, onChange) {
   draw();
 }
 
+// ---------- rifle set-up ----------
+
+// Shrinks a photo to a sensible size for keeping on the device.
+async function photoDataUrl(file, maxSide = 1400) {
+  let source;
+  try {
+    source = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    source = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('That file could not be read as an image.'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  const scale = Math.min(1, maxSide / Math.max(source.width, source.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(source.width * scale);
+  canvas.height = Math.round(source.height * scale);
+  canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+// Short free-text fields, shown together on one line: key, label, longest entry.
+const RIFLE_TEXT = [['name', 'Rifle name', 4], ['slingNumber', 'Sling number', 3], ['jacket', 'Jacket', 4]];
+// Fields with − and + buttons: key, label, step. They can also be typed into.
+const RIFLE_STEPS = [
+  ['handstop', 'Handstop position', 0.5],
+  ['sling', 'Sling length', 1],
+  ['foresight', 'Foresight element (mm)', 0.1],
+  ['spacers', 'Spacers', 1],
+];
+const RIFLE_PHOTOS = [['buttplate', 'Buttplate position'], ['cheekpiece', 'Cheekpiece position'], ['rearsight', 'Rearsight position']];
+
+// The rifle set-up pane: every change is saved straight away.
+async function mountRifle(el) {
+  const rifle = { name: '', slingNumber: '', jacket: '', handstop: null, sling: null, foresight: null, spacers: 0, ...(await store.getRifle()) };
+  rifle.photos = { ...rifle.photos };
+  // Anything that is not a number (an old free-text entry, say) shows as empty.
+  const has = (key) => rifle[key] !== null && rifle[key] !== '' && Number.isFinite(Number(rifle[key]));
+  const shown = (key, step) => (!has(key) ? '' : step < 1 ? Number(rifle[key]).toFixed(1) : String(Number(rifle[key])));
+  const save = async () => {
+    await store.putRifle({ ...rifle, updatedAt: new Date().toISOString() });
+    const note = el.querySelector('.saved');
+    if (note) note.textContent = 'Saved';
+  };
+  const draw = () => {
+    el.innerHTML = `
+      <div class="text-line">
+        ${RIFLE_TEXT.map(([key, label, max]) => `
+          <label class="field">${label}<input type="text" maxlength="${max}" data-text="${key}" value="${esc(String(rifle[key] ?? '').slice(0, max))}"></label>`).join('')}
+      </div>
+      ${RIFLE_STEPS.map(([key, label, step]) => `
+        <div class="field">${label}
+          <div class="stepper">
+            <button data-step="${-step}" data-key="${key}" aria-label="Decrease ${label}">−</button>
+            <input type="number" inputmode="${step < 1 ? 'decimal' : 'numeric'}" step="${step}" min="0" data-num="${key}" value="${shown(key, step)}" placeholder="–">
+            <button data-step="${step}" data-key="${key}" aria-label="Increase ${label}">+</button>
+          </div>
+        </div>`).join('')}
+      <div class="photos">
+        ${RIFLE_PHOTOS.map(([key, label]) => `
+          <div class="photo">
+            <span>${label}</span>
+            ${rifle.photos[key]
+              ? `<img src="${rifle.photos[key]}" alt="${label}" data-view="${key}">
+                 <div class="row"><label class="btn">Replace<input type="file" accept="image/*" data-photo="${key}" hidden></label>
+                 <button data-remove="${key}">Remove</button></div>`
+              : `<label class="btn photo-add">Add photo<input type="file" accept="image/*" data-photo="${key}" hidden></label>`}
+          </div>`).join('')}
+      </div>
+      <p class="muted saved">Changes are saved as you make them.</p>`;
+    const step = (key) => RIFLE_STEPS.find((r) => r[0] === key)[2];
+    const setNumber = (key, value) => {
+      if (value === null || Number.isNaN(value)) rifle[key] = null;
+      else rifle[key] = step(key) < 1 ? Math.max(0, Math.round(value * 10) / 10) : Math.max(0, Math.round(value));
+      el.querySelector(`[data-num=${key}]`).value = shown(key, step(key));
+      save();
+    };
+    el.querySelectorAll('[data-text]').forEach((input) => input.addEventListener('change', () => {
+      rifle[input.dataset.text] = input.value.trim();
+      save();
+    }));
+    el.querySelectorAll('[data-num]').forEach((input) => input.addEventListener('change', () =>
+      setNumber(input.dataset.num, input.value === '' ? null : Number(input.value))));
+    el.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () =>
+      setNumber(b.dataset.key, (has(b.dataset.key) ? Number(rifle[b.dataset.key]) : 0) + Number(b.dataset.step))));
+    el.querySelectorAll('[data-photo]').forEach((input) => input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      try {
+        rifle.photos[input.dataset.photo] = await photoDataUrl(file);
+        await save();
+        draw();
+      } catch (err) {
+        alert(err.message);
+      }
+    }));
+    el.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Remove this photo?')) return;
+      delete rifle.photos[b.dataset.remove];
+      await save();
+      draw();
+    }));
+    el.querySelectorAll('[data-view]').forEach((img) => img.addEventListener('click', () => {
+      const viewer = $('#editor');
+      viewer.innerHTML = `<div class="ed viewer"><div class="ed-head"><div class="ed-info"><small>${esc(img.alt)}</small></div>
+        <button id="view-close" class="primary">Done</button></div><img src="${img.src}" alt="${esc(img.alt)}"></div>`;
+      viewer.hidden = false;
+      $('#view-close').addEventListener('click', () => {
+        viewer.hidden = true;
+        viewer.innerHTML = '';
+      });
+    }));
+  };
+  draw();
+}
+
 // ---------- cards list ----------
 
 async function showCards() {
   const recs = await store.listCards();
+  // Newest date first, with that day's cards together under one heading.
+  const byDate = new Map();
+  for (const rec of recs) byDate.set(rec.date, [...(byDate.get(rec.date) ?? []), rec]);
+  const days = [...byDate];
   view.innerHTML = `
-    <div class="panel">
-      <div class="row">
-        <label class="btn primary">Take photo<input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
-        <label class="btn">Choose photo<input id="pick" type="file" accept="image/*" hidden></label>
+    <div class="add">
+      <div class="top-actions">
+        <button id="add" aria-expanded="false" aria-controls="add-menu">
+          <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><path d="M14 7.5v13M7.5 14h13"/></svg>
+          <span>Add card</span>
+        </button>
+        <button id="rifle" aria-expanded="false" aria-controls="rifle-pane">
+          <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><circle class="ring" cx="14" cy="14" r="6"/><path d="M14 4.5v5M14 18.5v5M4.5 14h5M18.5 14h5"/></svg>
+          <span>My Setup</span>
+        </button>
       </div>
-      <p class="muted">Lay the card flat on a plain white or light surface, with every aiming mark in the frame and no strong shadows.
-      ${Object.values(CARDS).map((c) => c.label).join(' and ')} cards are recognised automatically.</p>
+      <div id="add-menu" class="menu" hidden>
+        <label class="menu-item">Take photo<span>Use the camera now</span><input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
+        <label class="menu-item">Choose photo<span>Pick one already on this device</span><input id="pick" type="file" accept="image/*" hidden></label>
+        <p class="muted">Lay the card flat on a plain white or light surface, with every aiming mark in the frame and no strong shadows.
+        ${Object.values(CARDS).map((c) => c.label).join(' and ')} cards are recognised automatically.</p>
+      </div>
+      <div id="rifle-pane" class="menu rifle" hidden></div>
     </div>
     <h2>Saved cards</h2>
     ${recs.length ? '' : '<p class="muted">No cards saved yet.</p>'}
+    ${days.map(([date, list]) => `
+    <h3>${esc(longDate(date))}</h3>
     <ul class="card-list">
-      ${recs.map((rec) => {
+      ${list.map((rec) => {
         const open = unaccounted(rec);
         return `<li><a href="#/card/${esc(rec.id)}">
           <span class="total ${open ? 'pending' : ''}">${open ? '?' : cardTotal(rec, settings)}</span>
-          <span class="meta"><b>${esc(rec.name || 'Untitled')}</b><span class="muted">${esc(niceDate(rec.date))} · ${esc(cardType(rec).label)}${open ? ` · ${open} shot${open === 1 ? '' : 's'} to confirm` : ''}</span></span>
+          <span class="meta"><b>${esc(rec.name || 'Untitled')}</b><span class="muted">${esc(cardType(rec).label)}${open ? ` · ${open} shot${open === 1 ? '' : 's'} to confirm` : ''}</span></span>
           <span class="chev">›</span></a></li>`;
       }).join('')}
-    </ul>`;
+    </ul>`).join('')}`;
+  // The two top buttons each open a pane below; only one is open at a time.
+  const panes = { add: $('#add-menu'), rifle: $('#rifle-pane') };
+  const show = (which) => {
+    for (const [key, pane] of Object.entries(panes)) {
+      pane.hidden = key !== which;
+      $(`#${key}`).setAttribute('aria-expanded', String(key === which));
+    }
+  };
+  const toggle = (open) => show(open ? 'add' : null);
+  $('#add').addEventListener('click', () => show(panes.add.hidden ? 'add' : null));
+  $('#rifle').addEventListener('click', () => show(panes.rifle.hidden ? 'rifle' : null));
+  mountRifle(panes.rifle);
   for (const id of ['cam', 'pick']) {
     $(`#${id}`).addEventListener('change', (e) => {
       const file = e.target.files[0];
       e.target.value = '';
+      toggle(false);
       if (file) scan(file);
     });
   }
@@ -260,7 +412,7 @@ function renderCard() {
   }
   if (toCheck) notes.push(`${toCheck} shot${toCheck === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.`);
   view.innerHTML = `
-    <a class="back" href="#/">‹ All cards</a>
+    <a class="back" href="#/">‹ Dashboard</a>
     <div class="panel">
       ${cardSvg(rec, card, settings, order)}
       ${missing
@@ -329,6 +481,11 @@ function renderCard() {
 
 async function saveCard() {
   const { isNew, ...record } = current;
+  // Saving a new card accepts the detector's placements: shots it was unsure
+  // of count as reviewed from here on, whether or not each was opened.
+  if (isNew) {
+    record.shots = record.shots.map((s) => (unsure(s) ? { ...s, confidence: 'high' } : s));
+  }
   await store.putCard(record);
   current = record;
   dirty = false;
@@ -599,9 +756,8 @@ async function showAnalysis() {
     const colName = size === 2 ? ['left', 'right'][at] : size === 3 ? ['left', 'centre', 'right'][at] : ['far left', 'centre left', 'centre right', 'far right'][at];
     return `${rowName} row, ${colName}`;
   };
-  const values = [...card.rings.map((r) => r.score), 0];
+  const values = shotValues(card);
   const dist = values.map((v) => ({ v, n: shots.filter((s) => score(s) === v).length + (v === 0 ? misses : 0) }));
-  const lowest = card.rings.at(-1).score;
   view.innerHTML = `
     <div class="panel"><div class="row">
       ${types.length > 1 ? `<label class="field">Card type<select id="a-type">
@@ -628,7 +784,7 @@ async function showAnalysis() {
         </div>
         ${trendSvg(full.map((rec, i) => ({ label: esc(niceDate(rec.date)), value: totals[i] })))}`
         : '<p class="muted">No cards in this selection have every shot accounted for yet.</p>'}
-      <table style="margin-top:10px"><tr><th>Shot value</th>${dist.map((d) => `<th>${d.v || `Outside ${lowest}`}</th>`).join('')}</tr>
+      <table style="margin-top:10px"><tr><th>Shot value</th>${dist.map((d) => `<th>${d.v}</th>`).join('')}</tr>
         <tr><td>Count</td>${dist.map((d) => `<td>${d.n}</td>`).join('')}</tr></table>
     </div>
     <h2>Average score by ${per > 1 ? 'diagram' : 'shot number'}</h2>

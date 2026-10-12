@@ -15,6 +15,13 @@
 
 * { box-sizing: border-box; }
 
+/* Stops iPhones zooming the page on a quick double tap of a button. Pinch to
+   zoom still works. */
+html { touch-action: manipulation; }
+
+/* The hidden attribute always wins, whatever display a class sets. */
+[hidden] { display: none !important; }
+
 html, body { margin: 0; }
 
 body {
@@ -291,3 +298,64 @@ label.check input { width: 20px; height: 20px; accent-color: var(--blue); }
 .advanced h2 { font-size: 19px; letter-spacing: 0; text-transform: none; color: var(--ink); margin: 0 0 2px; }
 .advanced p { margin: 0; }
 h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 20px 4px 8px; }
+
+/* Add card menu */
+.add { margin-bottom: 14px; }
+.top-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.top-actions button {
+  min-height: 60px; padding: 0 12px; justify-content: flex-start; gap: 10px;
+  font-size: 16px; color: var(--blue-deep); background: var(--panel);
+  border: 2px solid var(--blue); border-radius: var(--radius);
+}
+.top-actions button span { flex: 1; text-align: left; }
+.add-icon { width: 30px; height: 30px; flex: none; }
+.add-icon circle { fill: var(--blue); }
+.add-icon .ring { fill: none; stroke: #fff; stroke-width: 2; }
+.add-icon path { stroke: #fff; stroke-width: 2.4; stroke-linecap: round; fill: none; }
+.top-actions button[aria-expanded="true"] { background: var(--blue-soft); }
+.menu {
+  margin-top: 8px; padding: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(22, 32, 46, 0.12);
+}
+.menu-item {
+  display: block; padding: 12px 14px; border-radius: var(--radius-sm);
+  font-weight: 600; color: var(--blue-deep); cursor: pointer;
+}
+.menu-item + .menu-item { border-top: 1px solid var(--line); border-top-left-radius: 0; border-top-right-radius: 0; }
+.menu-item:active { background: var(--blue-soft); }
+.menu-item span { display: block; font-size: 13px; font-weight: 500; color: var(--muted); }
+.menu p { margin: 8px 14px 6px; font-size: 13px; }
+
+/* Rifle set-up */
+.rifle { padding: 14px; display: grid; gap: 12px; }
+.rifle .field { display: block; font-size: 13px; color: var(--muted); font-weight: 600; }
+.stepper { display: grid; grid-template-columns: 52px 1fr 52px; gap: 8px; margin-top: 5px; }
+.stepper button { min-height: 46px; padding: 0; font-size: 22px; color: var(--blue-deep); }
+.stepper input {
+  min-height: 46px; width: 100%; text-align: center; font: inherit; font-weight: 700; font-size: 18px; color: var(--ink);
+  background: var(--tile); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  -moz-appearance: textfield; appearance: textfield;
+}
+.stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+/* One photo per row, shown whole, so the detail is readable on a phone. */
+.photos { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.photo { background: var(--tile); border-radius: var(--radius-sm); padding: 10px; display: grid; gap: 8px; align-content: start; }
+.photo > span { font-size: 13px; font-weight: 600; color: var(--muted); }
+.photo img { width: 100%; height: auto; border-radius: 8px; cursor: zoom-in; display: block; }
+.photo .row { gap: 6px; }
+.photo .row > * { flex: 1 1 0; min-height: 40px; padding: 0 8px; font-size: 14px; }
+.photo-add { min-height: 96px; border-style: dashed; color: var(--blue-deep); }
+.rifle p { margin: 0; font-size: 13px; }
+.viewer img { display: block; width: 100%; height: auto; border-radius: var(--radius); }
+
+/* iPhones zoom the page when a field's text is smaller than 16px, so every
+   field is at least that, whatever size its label is. */
+input, select, textarea { font-size: 16px; }
+label.field input, label.field select { font-size: 16px; }
+.stepper input { font-size: 18px; }
+
+/* My Setup: rifle name, sling number and jacket share one line. */
+.text-line { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-items: end; }
+.text-line .field { white-space: nowrap; min-width: 0; }
+.text-line input { padding: 0 8px; min-width: 0; }

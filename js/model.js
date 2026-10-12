@@ -22,14 +22,19 @@ export const CARDS = {
     aimingMarkDia: 51.4,
     centreDot: true,
     // Scoring ring diameters, to the outer edge of the printed line (checked
-    // against the blank card). Anything outside the lowest ring scores 0.
+    // against the blank card). The edge of the black is the 5 ring: a shot
+    // outside the 6 ring but wholly on the black scores 5.
     rings: [
       { score: 10, dia: 12.92 },
       { score: 9, dia: 20.23 },
       { score: 8, dia: 27.55 },
       { score: 7, dia: 34.86 },
       { score: 6, dia: 42.18 },
+      { score: 5, dia: 51.4 },
     ],
+    // A shot that breaks the edge of the black, partly on it and partly off,
+    // scores 4. One wholly off the black scores 0.
+    fringe: { score: 4, dia: 51.4 },
     // Outward: the whole gauge must lie on or inside the ring.
     gauging: 'outward',
     shotsPerDiagram: 1,
@@ -149,8 +154,13 @@ export function scoreShot(x, y, card, settings = DEFAULT_SETTINGS) {
   for (const ring of card.rings) {
     if (reach <= ring.dia / 2 + EPS) return ring.score;
   }
+  // Beyond the rings, a shot still touching the fringe circle scores its value.
+  if (card.fringe && d - g <= card.fringe.dia / 2 + EPS) return card.fringe.score;
   return 0;
 }
+
+// Every value a shot on this card can score, highest first, ending with 0.
+export const shotValues = (card) => [...card.rings.map((r) => r.score), ...(card.fringe ? [card.fringe.score] : []), 0];
 
 // Each entry in a card's `shots` is one of: a placed shot { x, y, ... }, a
 // confirmed miss { miss: true } (no hole on the diagram, scores 0), or null
