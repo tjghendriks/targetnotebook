@@ -15,6 +15,10 @@
 
 * { box-sizing: border-box; }
 
+/* Stops iPhones zooming the page on a quick double tap of a button. Pinch to
+   zoom still works. */
+html { touch-action: manipulation; }
+
 /* The hidden attribute always wins, whatever display a class sets. */
 [hidden] { display: none !important; }
 
@@ -344,3 +348,14 @@ h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: 
 .photo-add { min-height: 96px; border-style: dashed; color: var(--blue-deep); }
 .rifle p { margin: 0; font-size: 13px; }
 .viewer img { display: block; width: 100%; height: auto; border-radius: var(--radius); }
+
+/* iPhones zoom the page when a field's text is smaller than 16px, so every
+   field is at least that, whatever size its label is. */
+input, select, textarea { font-size: 16px; }
+label.field input, label.field select { font-size: 16px; }
+.stepper input { font-size: 18px; }
+
+/* My Setup: rifle name, sling number and jacket share one line. */
+.text-line { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-items: end; }
+.text-line .field { white-space: nowrap; min-width: 0; }
+.text-line input { padding: 0 8px; min-width: 0; }

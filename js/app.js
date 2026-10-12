@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.12-8';
-import * as store from './store.js?v=2026.10.12-8';
-import { scanCard, ScanError } from './detect.js?v=2026.10.12-8';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-8';
+} from './model.js?v=2026.10.12-11';
+import * as store from './store.js?v=2026.10.12-11';
+import { scanCard, ScanError } from './detect.js?v=2026.10.12-11';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-11';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.12-8';
+const VERSION = '2026.10.12-11';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -200,7 +200,8 @@ async function photoDataUrl(file, maxSide = 1400) {
   return canvas.toDataURL('image/jpeg', 0.82);
 }
 
-const RIFLE_TEXT = [['name', 'Rifle name']];
+// Short free-text fields, shown together on one line: key, label, longest entry.
+const RIFLE_TEXT = [['name', 'Rifle name', 4], ['slingNumber', 'Sling number', 3], ['jacket', 'Jacket', 4]];
 // Fields with − and + buttons: key, label, step. They can also be typed into.
 const RIFLE_STEPS = [
   ['handstop', 'Handstop position', 0.5],
@@ -212,7 +213,7 @@ const RIFLE_PHOTOS = [['buttplate', 'Buttplate position'], ['cheekpiece', 'Cheek
 
 // The rifle set-up pane: every change is saved straight away.
 async function mountRifle(el) {
-  const rifle = { name: '', handstop: null, sling: null, foresight: null, spacers: 0, ...(await store.getRifle()) };
+  const rifle = { name: '', slingNumber: '', jacket: '', handstop: null, sling: null, foresight: null, spacers: 0, ...(await store.getRifle()) };
   rifle.photos = { ...rifle.photos };
   // Anything that is not a number (an old free-text entry, say) shows as empty.
   const has = (key) => rifle[key] !== null && rifle[key] !== '' && Number.isFinite(Number(rifle[key]));
@@ -224,8 +225,10 @@ async function mountRifle(el) {
   };
   const draw = () => {
     el.innerHTML = `
-      ${RIFLE_TEXT.map(([key, label]) => `
-        <label class="field">${label}<input type="text" maxlength="80" data-text="${key}" value="${esc(rifle[key])}"></label>`).join('')}
+      <div class="text-line">
+        ${RIFLE_TEXT.map(([key, label, max]) => `
+          <label class="field">${label}<input type="text" maxlength="${max}" data-text="${key}" value="${esc(String(rifle[key] ?? '').slice(0, max))}"></label>`).join('')}
+      </div>
       ${RIFLE_STEPS.map(([key, label, step]) => `
         <div class="field">${label}
           <div class="stepper">
