@@ -1,6 +1,6 @@
 // On-device storage (IndexedDB): saved cards and settings.
 
-import { DEFAULT_SETTINGS } from './model.js?v=2026.10.12-5';
+import { DEFAULT_SETTINGS } from './model.js?v=2026.10.12-8';
 
 // Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';
@@ -50,8 +50,13 @@ export async function getSettings() {
 
 export const putSettings = (settings) => run('kv', 'readwrite', (s) => s.put(settings, 'settings'));
 
+// The one rifle's set-up, including its photos (as data URLs).
+export const getRifle = () => run('kv', 'readonly', (s) => s.get('rifle'));
+export const putRifle = (rifle) => run('kv', 'readwrite', (s) => s.put(rifle, 'rifle'));
+
 export async function exportData({ images }) {
   const cards = await listCards();
+  const rifle = await getRifle();
   return {
     app: 'targetscan',
     version: 1,
@@ -59,6 +64,8 @@ export async function exportData({ images }) {
     exportedAt: new Date().toISOString(),
     settings: await getSettings(),
     cards: images ? cards : cards.map(({ images: _drop, ...rest }) => rest),
+    // Rifle photos follow the same choice as card photos.
+    rifle: rifle && (images ? rifle : { ...rifle, photos: undefined }),
   };
 }
 
@@ -73,6 +80,10 @@ export async function importData(data) {
     const existing = await getCard(card.id);
     await putCard({ ...card, images: card.images ?? existing?.images ?? null });
     count++;
+  }
+  if (data.rifle) {
+    const existing = await getRifle();
+    await putRifle({ ...data.rifle, photos: data.rifle.photos ?? existing?.photos ?? {} });
   }
   return count;
 }
@@ -93,6 +104,12 @@ export async function usage() {
     const photos = (card.images ?? []).reduce((n, url) => n + (url?.length ?? 0), 0);
     photoBytes += photos;
     bytes += photos + JSON.stringify({ ...card, images: null }).length;
+  }
+  const rifle = await getRifle();
+  if (rifle) {
+    const photos = Object.values(rifle.photos ?? {}).reduce((n, url) => n + (url?.length ?? 0), 0);
+    photoBytes += photos;
+    bytes += photos + JSON.stringify({ ...rifle, photos: null }).length;
   }
   let quota = null;
   try {

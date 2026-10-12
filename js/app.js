@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.12-5';
-import * as store from './store.js?v=2026.10.12-5';
-import { scanCard, ScanError } from './detect.js?v=2026.10.12-5';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-5';
+} from './model.js?v=2026.10.12-8';
+import * as store from './store.js?v=2026.10.12-8';
+import { scanCard, ScanError } from './detect.js?v=2026.10.12-8';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-8';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.12-5';
+const VERSION = '2026.10.12-8';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -177,6 +177,121 @@ function mountOrderPicker(el, card, spec, onChange) {
   draw();
 }
 
+// ---------- rifle set-up ----------
+
+// Shrinks a photo to a sensible size for keeping on the device.
+async function photoDataUrl(file, maxSide = 1400) {
+  let source;
+  try {
+    source = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    source = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('That file could not be read as an image.'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  const scale = Math.min(1, maxSide / Math.max(source.width, source.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(source.width * scale);
+  canvas.height = Math.round(source.height * scale);
+  canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+const RIFLE_TEXT = [['name', 'Rifle name']];
+// Fields with − and + buttons: key, label, step. They can also be typed into.
+const RIFLE_STEPS = [
+  ['handstop', 'Handstop position', 0.5],
+  ['sling', 'Sling length', 1],
+  ['foresight', 'Foresight element (mm)', 0.1],
+  ['spacers', 'Spacers', 1],
+];
+const RIFLE_PHOTOS = [['buttplate', 'Buttplate position'], ['cheekpiece', 'Cheekpiece position'], ['rearsight', 'Rearsight position']];
+
+// The rifle set-up pane: every change is saved straight away.
+async function mountRifle(el) {
+  const rifle = { name: '', handstop: null, sling: null, foresight: null, spacers: 0, ...(await store.getRifle()) };
+  rifle.photos = { ...rifle.photos };
+  // Anything that is not a number (an old free-text entry, say) shows as empty.
+  const has = (key) => rifle[key] !== null && rifle[key] !== '' && Number.isFinite(Number(rifle[key]));
+  const shown = (key, step) => (!has(key) ? '' : step < 1 ? Number(rifle[key]).toFixed(1) : String(Number(rifle[key])));
+  const save = async () => {
+    await store.putRifle({ ...rifle, updatedAt: new Date().toISOString() });
+    const note = el.querySelector('.saved');
+    if (note) note.textContent = 'Saved';
+  };
+  const draw = () => {
+    el.innerHTML = `
+      ${RIFLE_TEXT.map(([key, label]) => `
+        <label class="field">${label}<input type="text" maxlength="80" data-text="${key}" value="${esc(rifle[key])}"></label>`).join('')}
+      ${RIFLE_STEPS.map(([key, label, step]) => `
+        <div class="field">${label}
+          <div class="stepper">
+            <button data-step="${-step}" data-key="${key}" aria-label="Decrease ${label}">−</button>
+            <input type="number" inputmode="${step < 1 ? 'decimal' : 'numeric'}" step="${step}" min="0" data-num="${key}" value="${shown(key, step)}" placeholder="–">
+            <button data-step="${step}" data-key="${key}" aria-label="Increase ${label}">+</button>
+          </div>
+        </div>`).join('')}
+      <div class="photos">
+        ${RIFLE_PHOTOS.map(([key, label]) => `
+          <div class="photo">
+            <span>${label}</span>
+            ${rifle.photos[key]
+              ? `<img src="${rifle.photos[key]}" alt="${label}" data-view="${key}">
+                 <div class="row"><label class="btn">Replace<input type="file" accept="image/*" data-photo="${key}" hidden></label>
+                 <button data-remove="${key}">Remove</button></div>`
+              : `<label class="btn photo-add">Add photo<input type="file" accept="image/*" data-photo="${key}" hidden></label>`}
+          </div>`).join('')}
+      </div>
+      <p class="muted saved">Changes are saved as you make them.</p>`;
+    const step = (key) => RIFLE_STEPS.find((r) => r[0] === key)[2];
+    const setNumber = (key, value) => {
+      if (value === null || Number.isNaN(value)) rifle[key] = null;
+      else rifle[key] = step(key) < 1 ? Math.max(0, Math.round(value * 10) / 10) : Math.max(0, Math.round(value));
+      el.querySelector(`[data-num=${key}]`).value = shown(key, step(key));
+      save();
+    };
+    el.querySelectorAll('[data-text]').forEach((input) => input.addEventListener('change', () => {
+      rifle[input.dataset.text] = input.value.trim();
+      save();
+    }));
+    el.querySelectorAll('[data-num]').forEach((input) => input.addEventListener('change', () =>
+      setNumber(input.dataset.num, input.value === '' ? null : Number(input.value))));
+    el.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () =>
+      setNumber(b.dataset.key, (has(b.dataset.key) ? Number(rifle[b.dataset.key]) : 0) + Number(b.dataset.step))));
+    el.querySelectorAll('[data-photo]').forEach((input) => input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      try {
+        rifle.photos[input.dataset.photo] = await photoDataUrl(file);
+        await save();
+        draw();
+      } catch (err) {
+        alert(err.message);
+      }
+    }));
+    el.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Remove this photo?')) return;
+      delete rifle.photos[b.dataset.remove];
+      await save();
+      draw();
+    }));
+    el.querySelectorAll('[data-view]').forEach((img) => img.addEventListener('click', () => {
+      const viewer = $('#editor');
+      viewer.innerHTML = `<div class="ed viewer"><div class="ed-head"><div class="ed-info"><small>${esc(img.alt)}</small></div>
+        <button id="view-close" class="primary">Done</button></div><img src="${img.src}" alt="${esc(img.alt)}"></div>`;
+      viewer.hidden = false;
+      $('#view-close').addEventListener('click', () => {
+        viewer.hidden = true;
+        viewer.innerHTML = '';
+      });
+    }));
+  };
+  draw();
+}
+
 // ---------- cards list ----------
 
 async function showCards() {
@@ -187,17 +302,23 @@ async function showCards() {
   const days = [...byDate];
   view.innerHTML = `
     <div class="add">
-      <button id="add" aria-expanded="false" aria-controls="add-menu">
-        <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><path d="M14 7.5v13M7.5 14h13"/></svg>
-        <span>Add card</span>
-        <svg class="add-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg>
-      </button>
+      <div class="top-actions">
+        <button id="add" aria-expanded="false" aria-controls="add-menu">
+          <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><path d="M14 7.5v13M7.5 14h13"/></svg>
+          <span>Add card</span>
+        </button>
+        <button id="rifle" aria-expanded="false" aria-controls="rifle-pane">
+          <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><circle class="ring" cx="14" cy="14" r="6"/><path d="M14 4.5v5M14 18.5v5M4.5 14h5M18.5 14h5"/></svg>
+          <span>My Setup</span>
+        </button>
+      </div>
       <div id="add-menu" class="menu" hidden>
         <label class="menu-item">Take photo<span>Use the camera now</span><input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
         <label class="menu-item">Choose photo<span>Pick one already on this device</span><input id="pick" type="file" accept="image/*" hidden></label>
         <p class="muted">Lay the card flat on a plain white or light surface, with every aiming mark in the frame and no strong shadows.
         ${Object.values(CARDS).map((c) => c.label).join(' and ')} cards are recognised automatically.</p>
       </div>
+      <div id="rifle-pane" class="menu rifle" hidden></div>
     </div>
     <h2>Saved cards</h2>
     ${recs.length ? '' : '<p class="muted">No cards saved yet.</p>'}
@@ -212,12 +333,18 @@ async function showCards() {
           <span class="chev">›</span></a></li>`;
       }).join('')}
     </ul>`).join('')}`;
-  const menu = $('#add-menu');
-  const toggle = (open) => {
-    menu.hidden = !open;
-    $('#add').setAttribute('aria-expanded', String(open));
+  // The two top buttons each open a pane below; only one is open at a time.
+  const panes = { add: $('#add-menu'), rifle: $('#rifle-pane') };
+  const show = (which) => {
+    for (const [key, pane] of Object.entries(panes)) {
+      pane.hidden = key !== which;
+      $(`#${key}`).setAttribute('aria-expanded', String(key === which));
+    }
   };
-  $('#add').addEventListener('click', () => toggle(menu.hidden));
+  const toggle = (open) => show(open ? 'add' : null);
+  $('#add').addEventListener('click', () => show(panes.add.hidden ? 'add' : null));
+  $('#rifle').addEventListener('click', () => show(panes.rifle.hidden ? 'rifle' : null));
+  mountRifle(panes.rifle);
   for (const id of ['cam', 'pick']) {
     $(`#${id}`).addEventListener('change', (e) => {
       const file = e.target.files[0];
@@ -282,7 +409,7 @@ function renderCard() {
   }
   if (toCheck) notes.push(`${toCheck} shot${toCheck === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.`);
   view.innerHTML = `
-    <a class="back" href="#/">‹ All cards</a>
+    <a class="back" href="#/">‹ Dashboard</a>
     <div class="panel">
       ${cardSvg(rec, card, settings, order)}
       ${missing

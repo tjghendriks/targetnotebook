@@ -15,6 +15,9 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute always wins, whatever display a class sets. */
+[hidden] { display: none !important; }
+
 html, body { margin: 0; }
 
 body {
@@ -294,19 +297,18 @@ h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: 
 
 /* Add card menu */
 .add { margin-bottom: 14px; }
-.add > button {
-  width: 100%; min-height: 60px; padding: 0 16px; justify-content: flex-start; gap: 12px;
-  font-size: 17px; color: var(--blue-deep); background: var(--panel);
+.top-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.top-actions button {
+  min-height: 60px; padding: 0 12px; justify-content: flex-start; gap: 10px;
+  font-size: 16px; color: var(--blue-deep); background: var(--panel);
   border: 2px solid var(--blue); border-radius: var(--radius);
 }
-.add > button span { flex: 1; text-align: left; }
+.top-actions button span { flex: 1; text-align: left; }
 .add-icon { width: 30px; height: 30px; flex: none; }
 .add-icon circle { fill: var(--blue); }
-.add-icon path { stroke: #fff; stroke-width: 2.6; stroke-linecap: round; fill: none; }
-.add-chev { width: 18px; height: 18px; flex: none; transition: transform 0.15s; }
-.add-chev path { stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
-.add > button[aria-expanded="true"] { background: var(--blue-soft); }
-.add > button[aria-expanded="true"] .add-chev { transform: rotate(180deg); }
+.add-icon .ring { fill: none; stroke: #fff; stroke-width: 2; }
+.add-icon path { stroke: #fff; stroke-width: 2.4; stroke-linecap: round; fill: none; }
+.top-actions button[aria-expanded="true"] { background: var(--blue-soft); }
 .menu {
   margin-top: 8px; padding: 8px;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
@@ -320,3 +322,25 @@ h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: 
 .menu-item:active { background: var(--blue-soft); }
 .menu-item span { display: block; font-size: 13px; font-weight: 500; color: var(--muted); }
 .menu p { margin: 8px 14px 6px; font-size: 13px; }
+
+/* Rifle set-up */
+.rifle { padding: 14px; display: grid; gap: 12px; }
+.rifle .field { display: block; font-size: 13px; color: var(--muted); font-weight: 600; }
+.stepper { display: grid; grid-template-columns: 52px 1fr 52px; gap: 8px; margin-top: 5px; }
+.stepper button { min-height: 46px; padding: 0; font-size: 22px; color: var(--blue-deep); }
+.stepper input {
+  min-height: 46px; width: 100%; text-align: center; font: inherit; font-weight: 700; font-size: 18px; color: var(--ink);
+  background: var(--tile); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  -moz-appearance: textfield; appearance: textfield;
+}
+.stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+/* One photo per row, shown whole, so the detail is readable on a phone. */
+.photos { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.photo { background: var(--tile); border-radius: var(--radius-sm); padding: 10px; display: grid; gap: 8px; align-content: start; }
+.photo > span { font-size: 13px; font-weight: 600; color: var(--muted); }
+.photo img { width: 100%; height: auto; border-radius: 8px; cursor: zoom-in; display: block; }
+.photo .row { gap: 6px; }
+.photo .row > * { flex: 1 1 0; min-height: 40px; padding: 0 8px; font-size: 14px; }
+.photo-add { min-height: 96px; border-style: dashed; color: var(--blue-deep); }
+.rifle p { margin: 0; font-size: 13px; }
+.viewer img { display: block; width: 100%; height: auto; border-radius: var(--radius); }
