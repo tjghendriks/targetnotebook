@@ -1,6 +1,6 @@
 // On-device storage (IndexedDB): saved cards and settings.
 
-import { DEFAULT_SETTINGS } from './model.js?v=2026.10.11-13';
+import { DEFAULT_SETTINGS } from './model.js?v=2026.10.12-5';
 
 // Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';

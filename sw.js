@@ -1,6 +1,6 @@
 // Offline support: serve from the network when there is one, otherwise from the cache.
 // VERSION is set by dev/set-version.py.
-const VERSION = '2026.10.11-13';
+const VERSION = '2026.10.12-5';
 const CACHE = `targetnotebook-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest',

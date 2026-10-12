@@ -291,3 +291,32 @@ label.check input { width: 20px; height: 20px; accent-color: var(--blue); }
 .advanced h2 { font-size: 19px; letter-spacing: 0; text-transform: none; color: var(--ink); margin: 0 0 2px; }
 .advanced p { margin: 0; }
 h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 20px 4px 8px; }
+
+/* Add card menu */
+.add { margin-bottom: 14px; }
+.add > button {
+  width: 100%; min-height: 60px; padding: 0 16px; justify-content: flex-start; gap: 12px;
+  font-size: 17px; color: var(--blue-deep); background: var(--panel);
+  border: 2px solid var(--blue); border-radius: var(--radius);
+}
+.add > button span { flex: 1; text-align: left; }
+.add-icon { width: 30px; height: 30px; flex: none; }
+.add-icon circle { fill: var(--blue); }
+.add-icon path { stroke: #fff; stroke-width: 2.6; stroke-linecap: round; fill: none; }
+.add-chev { width: 18px; height: 18px; flex: none; transition: transform 0.15s; }
+.add-chev path { stroke: var(--muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.add > button[aria-expanded="true"] { background: var(--blue-soft); }
+.add > button[aria-expanded="true"] .add-chev { transform: rotate(180deg); }
+.menu {
+  margin-top: 8px; padding: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(22, 32, 46, 0.12);
+}
+.menu-item {
+  display: block; padding: 12px 14px; border-radius: var(--radius-sm);
+  font-weight: 600; color: var(--blue-deep); cursor: pointer;
+}
+.menu-item + .menu-item { border-top: 1px solid var(--line); border-top-left-radius: 0; border-top-right-radius: 0; }
+.menu-item:active { background: var(--blue-soft); }
+.menu-item span { display: block; font-size: 13px; font-weight: 500; color: var(--muted); }
+.menu p { margin: 8px 14px 6px; font-size: 13px; }

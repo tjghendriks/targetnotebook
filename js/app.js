@@ -1,14 +1,14 @@
 import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
-  isShot, isMiss, shotValue, unaccounted,
+  isShot, isMiss, shotValue, shotValues, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.11-13';
-import * as store from './store.js?v=2026.10.11-13';
-import { scanCard, ScanError } from './detect.js?v=2026.10.11-13';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.11-13';
+} from './model.js?v=2026.10.12-5';
+import * as store from './store.js?v=2026.10.12-5';
+import { scanCard, ScanError } from './detect.js?v=2026.10.12-5';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-5';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.11-13';
+const VERSION = '2026.10.12-5';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -22,6 +22,10 @@ const today = () => {
 const niceDate = (iso) => {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+};
+const longDate = (iso) => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 };
 const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high';
 
@@ -177,30 +181,48 @@ function mountOrderPicker(el, card, spec, onChange) {
 
 async function showCards() {
   const recs = await store.listCards();
+  // Newest date first, with that day's cards together under one heading.
+  const byDate = new Map();
+  for (const rec of recs) byDate.set(rec.date, [...(byDate.get(rec.date) ?? []), rec]);
+  const days = [...byDate];
   view.innerHTML = `
-    <div class="panel">
-      <div class="row">
-        <label class="btn primary">Take photo<input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
-        <label class="btn">Choose photo<input id="pick" type="file" accept="image/*" hidden></label>
+    <div class="add">
+      <button id="add" aria-expanded="false" aria-controls="add-menu">
+        <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><path d="M14 7.5v13M7.5 14h13"/></svg>
+        <span>Add card</span>
+        <svg class="add-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6"/></svg>
+      </button>
+      <div id="add-menu" class="menu" hidden>
+        <label class="menu-item">Take photo<span>Use the camera now</span><input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
+        <label class="menu-item">Choose photo<span>Pick one already on this device</span><input id="pick" type="file" accept="image/*" hidden></label>
+        <p class="muted">Lay the card flat on a plain white or light surface, with every aiming mark in the frame and no strong shadows.
+        ${Object.values(CARDS).map((c) => c.label).join(' and ')} cards are recognised automatically.</p>
       </div>
-      <p class="muted">Lay the card flat on a plain white or light surface, with every aiming mark in the frame and no strong shadows.
-      ${Object.values(CARDS).map((c) => c.label).join(' and ')} cards are recognised automatically.</p>
     </div>
     <h2>Saved cards</h2>
     ${recs.length ? '' : '<p class="muted">No cards saved yet.</p>'}
+    ${days.map(([date, list]) => `
+    <h3>${esc(longDate(date))}</h3>
     <ul class="card-list">
-      ${recs.map((rec) => {
+      ${list.map((rec) => {
         const open = unaccounted(rec);
         return `<li><a href="#/card/${esc(rec.id)}">
           <span class="total ${open ? 'pending' : ''}">${open ? '?' : cardTotal(rec, settings)}</span>
-          <span class="meta"><b>${esc(rec.name || 'Untitled')}</b><span class="muted">${esc(niceDate(rec.date))} · ${esc(cardType(rec).label)}${open ? ` · ${open} shot${open === 1 ? '' : 's'} to confirm` : ''}</span></span>
+          <span class="meta"><b>${esc(rec.name || 'Untitled')}</b><span class="muted">${esc(cardType(rec).label)}${open ? ` · ${open} shot${open === 1 ? '' : 's'} to confirm` : ''}</span></span>
           <span class="chev">›</span></a></li>`;
       }).join('')}
-    </ul>`;
+    </ul>`).join('')}`;
+  const menu = $('#add-menu');
+  const toggle = (open) => {
+    menu.hidden = !open;
+    $('#add').setAttribute('aria-expanded', String(open));
+  };
+  $('#add').addEventListener('click', () => toggle(menu.hidden));
   for (const id of ['cam', 'pick']) {
     $(`#${id}`).addEventListener('change', (e) => {
       const file = e.target.files[0];
       e.target.value = '';
+      toggle(false);
       if (file) scan(file);
     });
   }
@@ -329,6 +351,11 @@ function renderCard() {
 
 async function saveCard() {
   const { isNew, ...record } = current;
+  // Saving a new card accepts the detector's placements: shots it was unsure
+  // of count as reviewed from here on, whether or not each was opened.
+  if (isNew) {
+    record.shots = record.shots.map((s) => (unsure(s) ? { ...s, confidence: 'high' } : s));
+  }
   await store.putCard(record);
   current = record;
   dirty = false;
@@ -599,9 +626,8 @@ async function showAnalysis() {
     const colName = size === 2 ? ['left', 'right'][at] : size === 3 ? ['left', 'centre', 'right'][at] : ['far left', 'centre left', 'centre right', 'far right'][at];
     return `${rowName} row, ${colName}`;
   };
-  const values = [...card.rings.map((r) => r.score), 0];
+  const values = shotValues(card);
   const dist = values.map((v) => ({ v, n: shots.filter((s) => score(s) === v).length + (v === 0 ? misses : 0) }));
-  const lowest = card.rings.at(-1).score;
   view.innerHTML = `
     <div class="panel"><div class="row">
       ${types.length > 1 ? `<label class="field">Card type<select id="a-type">
@@ -628,7 +654,7 @@ async function showAnalysis() {
         </div>
         ${trendSvg(full.map((rec, i) => ({ label: esc(niceDate(rec.date)), value: totals[i] })))}`
         : '<p class="muted">No cards in this selection have every shot accounted for yet.</p>'}
-      <table style="margin-top:10px"><tr><th>Shot value</th>${dist.map((d) => `<th>${d.v || `Outside ${lowest}`}</th>`).join('')}</tr>
+      <table style="margin-top:10px"><tr><th>Shot value</th>${dist.map((d) => `<th>${d.v}</th>`).join('')}</tr>
         <tr><td>Count</td>${dist.map((d) => `<td>${d.n}</td>`).join('')}</tr></table>
     </div>
     <h2>Average score by ${per > 1 ? 'diagram' : 'shot number'}</h2>
