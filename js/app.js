@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.12-11';
-import * as store from './store.js?v=2026.10.12-11';
-import { scanCard, ScanError } from './detect.js?v=2026.10.12-11';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-11';
+} from './model.js?v=2026.10.12-14';
+import * as store from './store.js?v=2026.10.12-14';
+import { scanCard, ScanError } from './detect.js?v=2026.10.12-14';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-14';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.12-11';
+const VERSION = '2026.10.12-14';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -43,6 +43,29 @@ function toast(text) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.hidden = true), 3500);
 }
+
+// The app's own question and message boxes. The browser's built-in confirm()
+// and alert() are not used: some browsers and in-app views suppress them, which
+// silently answers "no" and leaves buttons that seem to do nothing.
+function dialog(message, buttons) {
+  return new Promise((resolve) => {
+    const el = $('#dialog');
+    el.innerHTML = `<div class="dialog-box" role="alertdialog" aria-modal="true">
+      <p>${esc(message)}</p>
+      <div class="row">${buttons.map((b, i) => `<button data-i="${i}" class="${b.primary ? 'primary' : ''}">${esc(b.label)}</button>`).join('')}</div>
+    </div>`;
+    el.hidden = false;
+    el.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+      el.hidden = true;
+      el.innerHTML = '';
+      resolve(buttons[Number(b.dataset.i)].value);
+    }));
+    el.querySelector('button.primary')?.focus();
+  });
+}
+const ask = (message, yes, no = 'Cancel') =>
+  dialog(message, [{ label: no, value: false }, { label: yes, value: true, primary: true }]);
+const tell = (message) => dialog(message, [{ label: 'OK', value: true, primary: true }]);
 
 function busy(text) {
   $('#busy').hidden = text === null;
@@ -272,11 +295,11 @@ async function mountRifle(el) {
         await save();
         draw();
       } catch (err) {
-        alert(err.message);
+        tell(err.message);
       }
     }));
     el.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
-      if (!confirm('Remove this photo?')) return;
+      if (!(await ask('Remove this photo?', 'Remove'))) return;
       delete rifle.photos[b.dataset.remove];
       await save();
       draw();
@@ -381,7 +404,7 @@ async function scan(file) {
   } catch (err) {
     busy(null);
     console.error(err);
-    alert(err instanceof ScanError ? err.message : `Sorry, that photo could not be processed. (${err.message})`);
+    tell(err instanceof ScanError ? err.message : `Sorry, that photo could not be processed. (${err.message})`);
   }
 }
 
@@ -462,7 +485,10 @@ function renderCard() {
   $('#f-name').addEventListener('input', touch);
   $('#save').addEventListener('click', saveCard);
   $('#del').addEventListener('click', async () => {
-    if (!confirm(rec.isNew ? 'Discard this scan?' : 'Delete this card and its shots? This cannot be undone.')) return;
+    const sure = rec.isNew
+      ? await ask('Discard this scan?', 'Discard')
+      : await ask('Delete this card and its shots? This cannot be undone.', 'Delete');
+    if (!sure) return;
     if (!rec.isNew) await store.deleteCard(rec.id);
     current = null;
     dirty = false;
@@ -900,7 +926,7 @@ async function showSettings() {
       const count = await store.importData(JSON.parse(await file.text()));
       toast(`Restored ${count} card${count === 1 ? '' : 's'}`);
     } catch (err) {
-      alert(`That backup could not be restored. ${err.message}`);
+      tell(`That backup could not be restored. ${err.message}`);
     }
   });
 }
@@ -910,7 +936,7 @@ async function showSettings() {
 async function route() {
   const hash = location.hash || '#/';
   const leavingCard = current && dirty && !hash.startsWith('#/card/');
-  if (leavingCard && !confirm('Leave without saving this card?')) {
+  if (leavingCard && !(await ask('Leave without saving this card?', 'Leave', 'Stay'))) {
     history.replaceState(null, '', current.isNew ? '#/card/new' : `#/card/${current.id}`);
     return;
   }

@@ -94,7 +94,7 @@ body.card-open .tabs { display: none; }
   box-shadow: 0 6px 20px rgba(22, 32, 46, 0.12);
   z-index: 5;
 }
-.actions button { flex: 1; }
+.actions button { flex: 1; padding: 0 10px; white-space: nowrap; }
 .actions button.primary { flex: 2; }
 .back { display: inline-block; padding: 4px 4px 12px; color: var(--blue-deep); font-weight: 600; text-decoration: none; }
 
@@ -359,3 +359,8 @@ label.field input, label.field select { font-size: 16px; }
 .text-line { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-items: end; }
 .text-line .field { white-space: nowrap; min-width: 0; }
 .text-line input { padding: 0 8px; min-width: 0; }
+
+/* The app's own question and message boxes */
+#dialog { position: fixed; inset: 0; background: rgba(15, 26, 44, 0.55); display: grid; place-items: center; padding: 20px; z-index: 50; }
+.dialog-box { background: var(--panel); border-radius: var(--radius); padding: 20px; width: min(420px, 100%); box-shadow: 0 10px 30px rgba(15, 26, 44, 0.3); }
+.dialog-box p { margin: 0 0 16px; font-size: 17px; font-weight: 600; }
