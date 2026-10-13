@@ -1,7 +1,7 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { scoreShot, isShot, isMiss } from './model.js?v=2026.10.12-14';
+import { scoreShot, isShot, isMiss } from './model.js?v=2026.10.13-6';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';

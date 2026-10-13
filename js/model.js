@@ -128,6 +128,8 @@ export function resolveOrder(card, spec) {
 }
 
 export const DEFAULT_SETTINGS = {
+  // 'right' or 'left'. Settings saved before this existed have none, and read as right.
+  handedness: 'right',
   gaugeDia: 5.6,
   clickMoa: 1 / 6,
   // Default firing order: shotOrder for the 2510BM, shotOrders[type] for other cards.

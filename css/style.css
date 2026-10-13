@@ -364,3 +364,40 @@ label.field input, label.field select { font-size: 16px; }
 #dialog { position: fixed; inset: 0; background: rgba(15, 26, 44, 0.55); display: grid; place-items: center; padding: 20px; z-index: 50; }
 .dialog-box { background: var(--panel); border-radius: var(--radius); padding: 20px; width: min(420px, 100%); box-shadow: 0 10px 30px rgba(15, 26, 44, 0.3); }
 .dialog-box p { margin: 0 0 16px; font-size: 17px; font-weight: 600; }
+
+/* Notes: on a card, and standing alone */
+label.field textarea {
+  display: block; width: 100%; margin-top: 5px; padding: 10px 12px;
+  font: inherit; font-size: 16px; line-height: 1.45; color: var(--ink);
+  background: var(--tile); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  resize: vertical;
+}
+.notes-field { margin-top: 12px; }
+.card-list .total.note-badge { background: var(--tile); display: grid; place-items: center; }
+.note-badge svg { width: 26px; height: 26px; }
+.note-badge path { stroke: var(--muted); stroke-width: 2; stroke-linecap: round; fill: none; }
+a.menu-item { text-decoration: none; }
+
+/* Add new menu: card buttons, the photo tip, then a training note */
+.add-menu { padding: 14px; display: grid; gap: 10px; }
+.add-menu h4 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.menu-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.menu-btn { min-height: 52px; padding: 0 8px; gap: 6px; font-size: 15px; white-space: nowrap; color: var(--blue-deep); text-decoration: none; }
+.menu-btn svg { width: 22px; height: 22px; flex: none; fill: none; stroke: var(--blue); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.add-menu p { margin: 0 2px 4px; font-size: 13px; }
+
+/* iPhones give date fields their own minimum width and centred text, which
+   pushed them past the right edge of the panel. Make them behave like the
+   other fields. */
+label.field { min-width: 0; }
+label.field input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 44px;
+  text-align: left;
+}
+input[type="date"]::-webkit-date-and-time-value { text-align: left; min-height: 1.2em; }
