@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.12-14';
-import * as store from './store.js?v=2026.10.12-14';
-import { scanCard, ScanError } from './detect.js?v=2026.10.12-14';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.12-14';
+} from './model.js?v=2026.10.13-6';
+import * as store from './store.js?v=2026.10.13-6';
+import { scanCard, ScanError } from './detect.js?v=2026.10.13-6';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.13-6';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.12-14';
+const VERSION = '2026.10.13-6';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -32,6 +32,8 @@ const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high
 let settings;
 let current = null; // the card being viewed or edited
 let dirty = false;
+let note = null; // the training note being written or edited
+let noteDirty = false;
 
 // ---------- small UI helpers ----------
 
@@ -322,40 +324,66 @@ async function mountRifle(el) {
 
 async function showCards() {
   const recs = await store.listCards();
-  // Newest date first, with that day's cards together under one heading.
+  const notes = await store.listNotes();
+  // Cards and training notes together: newest date first, and within a day
+  // the most recently added first, each day under one heading.
+  const items = [
+    ...recs.map((rec) => ({ rec, date: rec.date, at: rec.createdAt ?? '' })),
+    ...notes.map((n) => ({ note: n, date: n.date, at: n.createdAt ?? '' })),
+  ].sort((a, b) => (b.date + b.at).localeCompare(a.date + a.at));
   const byDate = new Map();
-  for (const rec of recs) byDate.set(rec.date, [...(byDate.get(rec.date) ?? []), rec]);
+  for (const item of items) byDate.set(item.date, [...(byDate.get(item.date) ?? []), item]);
   const days = [...byDate];
+  const firstLine = (text) => text.trim().split('\n')[0];
+  const clock = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  };
   view.innerHTML = `
     <div class="add">
       <div class="top-actions">
         <button id="add" aria-expanded="false" aria-controls="add-menu">
           <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><path d="M14 7.5v13M7.5 14h13"/></svg>
-          <span>Add card</span>
+          <span>Add new</span>
         </button>
         <button id="rifle" aria-expanded="false" aria-controls="rifle-pane">
           <svg class="add-icon" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14"/><circle class="ring" cx="14" cy="14" r="6"/><path d="M14 4.5v5M14 18.5v5M4.5 14h5M18.5 14h5"/></svg>
           <span>My Setup</span>
         </button>
       </div>
-      <div id="add-menu" class="menu" hidden>
-        <label class="menu-item">Take photo<span>Use the camera now</span><input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
-        <label class="menu-item">Choose photo<span>Pick one already on this device</span><input id="pick" type="file" accept="image/*" hidden></label>
-        <p class="muted">Lay the card flat on a plain white or light surface, with every aiming mark in the frame and no strong shadows.
-        ${Object.values(CARDS).map((c) => c.label).join(' and ')} cards are recognised automatically.</p>
+      <div id="add-menu" class="menu add-menu" hidden>
+        <h4>Card</h4>
+        <div class="menu-row">
+          <label class="btn menu-btn">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 8.5h3.2l1.6-2.5h7.4l1.6 2.5h3.2v10.5h-17z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+            Take photo<input id="cam" type="file" accept="image/*" capture="environment" hidden></label>
+          <label class="btn menu-btn">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17.5l5-5 3.5 3.5 2.5-2.5 5 5"/></svg>
+            Choose photo<input id="pick" type="file" accept="image/*" hidden></label>
+        </div>
+        <p class="muted">Lay the card flat on a plain light surface, with every aiming mark in frame and no strong shadows.</p>
+        <a class="btn menu-btn" href="#/note/new">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14M5 10h14M5 14.5h14M5 19h8"/></svg>
+          Training note</a>
       </div>
       <div id="rifle-pane" class="menu rifle" hidden></div>
     </div>
-    <h2>Saved cards</h2>
-    ${recs.length ? '' : '<p class="muted">No cards saved yet.</p>'}
+    <h2>Saved cards and notes</h2>
+    ${items.length ? '' : '<p class="muted">Nothing saved yet.</p>'}
     ${days.map(([date, list]) => `
     <h3>${esc(longDate(date))}</h3>
     <ul class="card-list">
-      ${list.map((rec) => {
+      ${list.map(({ rec, note: n }) => {
+        if (n) {
+          return `<li><a href="#/note/${esc(n.id)}">
+            <span class="total note-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14M5 10h14M5 14.5h14M5 19h8"/></svg></span>
+            <span class="meta"><b>${esc(firstLine(n.text) || 'Training note')}</b><span class="muted">Training note${clock(n.createdAt) ? ` · ${esc(clock(n.createdAt))}` : ''}</span></span>
+            <span class="chev">›</span></a></li>`;
+        }
         const open = unaccounted(rec);
         return `<li><a href="#/card/${esc(rec.id)}">
           <span class="total ${open ? 'pending' : ''}">${open ? '?' : cardTotal(rec, settings)}</span>
-          <span class="meta"><b>${esc(rec.name || 'Untitled')}</b><span class="muted">${esc(cardType(rec).label)}${open ? ` · ${open} shot${open === 1 ? '' : 's'} to confirm` : ''}</span></span>
+          <span class="meta">${rec.name ? `<b>${esc(rec.name)}</b>` : ''}<span class="muted">${esc(cardType(rec).label)}${open ? ` · ${open} shot${open === 1 ? '' : 's'} to confirm` : ''}${rec.notes ? ' · has notes' : ''}</span></span>
           <span class="chev">›</span></a></li>`;
       }).join('')}
     </ul>`).join('')}`;
@@ -447,6 +475,8 @@ function renderCard() {
         <label class="field">Date<input id="f-date" type="date" value="${esc(rec.date)}"></label>
         <label class="field">Competition / session<input id="f-name" type="text" maxlength="80" placeholder="e.g. Winter league round 3" value="${esc(rec.name)}"></label>
       </div>
+      <label class="field notes-field">Notes for this card (optional)<textarea id="f-notes" rows="3" maxlength="4000"
+        placeholder="Anything about this card: set-up changes, time limit, technique points to review">${esc(rec.notes ?? '')}</textarea></label>
     </div>
     <h2>Shots</h2>
     <div class="panel">
@@ -477,12 +507,14 @@ function renderCard() {
   const touch = () => {
     rec.date = $('#f-date').value || today();
     rec.name = $('#f-name').value.trim();
+    rec.notes = $('#f-notes').value.trim();
     dirty = true;
     $('#save').disabled = false;
     $('#save').textContent = rec.isNew ? 'Save card' : 'Save changes';
   };
   $('#f-date').addEventListener('input', touch);
   $('#f-name').addEventListener('input', touch);
+  $('#f-notes').addEventListener('input', touch);
   $('#save').addEventListener('click', saveCard);
   $('#del').addEventListener('click', async () => {
     const sure = rec.isNew
@@ -850,6 +882,14 @@ async function showSettings() {
     unsupported: 'This browser cannot guarantee long-term storage. Keep a backup.',
   }[state];
   view.innerHTML = `
+    <h2>Shooter</h2>
+    <div class="panel">
+      <label class="field">Shoots<select id="s-hand">
+        <option value="right" ${settings.handedness === 'left' ? '' : 'selected'}>Right-handed</option>
+        <option value="left" ${settings.handedness === 'left' ? 'selected' : ''}>Left-handed</option>
+      </select></label>
+      <p class="muted">Choosing left-handed ticks "Mirror image" on the shot orders below, and right-handed unticks it. You can still change those boxes yourself afterwards.</p>
+    </div>
     ${Object.values(CARDS).map((c) => `
     <h2>Default shot order, ${esc(c.label)}</h2>
     <div class="panel">
@@ -903,6 +943,24 @@ async function showSettings() {
     showSettings();
   };
   for (const id of ['s-gauge', 's-clicks']) $(`#${id}`).addEventListener('change', save);
+  $('#s-hand').addEventListener('change', async (e) => {
+    const handedness = e.target.value === 'left' ? 'left' : 'right';
+    // Changing hand sets the mirror option on every default order to match.
+    // Saved cards keep the order they were scanned with.
+    const mirror = handedness === 'left';
+    const orders = {};
+    for (const c of Object.values(CARDS)) {
+      if (c.id !== DEFAULT_TYPE) orders[c.id] = { ...defaultOrderSpec(settings, c), mirror };
+    }
+    settings = {
+      ...settings,
+      handedness,
+      shotOrder: { ...defaultOrderSpec(settings, CARDS[DEFAULT_TYPE]), mirror },
+      shotOrders: { ...settings.shotOrders, ...orders },
+    };
+    await store.putSettings(settings);
+    showSettings();
+  });
   for (const c of Object.values(CARDS)) {
     mountOrderPicker($(`#s-order-${c.id}`), c, defaultOrderSpec(settings, c), async (spec) => {
       settings = c.id === DEFAULT_TYPE
@@ -931,6 +989,63 @@ async function showSettings() {
   });
 }
 
+// ---------- training notes ----------
+
+async function showNote(id) {
+  if (id === 'new') {
+    if (!note?.isNew) {
+      note = { id: store.newId(), isNew: true, date: today(), text: '', createdAt: new Date().toISOString() };
+      noteDirty = false;
+    }
+  } else if (note?.id !== id || note.isNew) {
+    note = await store.getNote(id);
+    noteDirty = false;
+    if (!note) return void (location.hash = '#/');
+  }
+  const n = note;
+  view.innerHTML = `
+    <a class="back" href="#/">‹ Dashboard</a>
+    <div class="panel">
+      <label class="field">Date<input id="n-date" type="date" value="${esc(n.date)}"></label>
+      <label class="field notes-field">Training note<textarea id="n-text" rows="12" maxlength="20000"
+        placeholder="What you worked on, what went well, what to change next time">${esc(n.text)}</textarea></label>
+    </div>
+    <div class="actions">
+      <button id="n-save" class="primary" ${noteDirty && n.text.trim() ? '' : 'disabled'}>${n.isNew ? 'Save note' : noteDirty ? 'Save changes' : 'Saved'}</button>
+      <button id="n-del" class="danger">${n.isNew ? 'Discard' : 'Delete note'}</button>
+    </div>`;
+  const touch = () => {
+    n.date = $('#n-date').value || today();
+    n.text = $('#n-text').value;
+    noteDirty = true;
+    $('#n-save').disabled = !n.text.trim();
+    $('#n-save').textContent = n.isNew ? 'Save note' : 'Save changes';
+  };
+  $('#n-date').addEventListener('input', touch);
+  $('#n-text').addEventListener('input', touch);
+  $('#n-save').addEventListener('click', async () => {
+    const { isNew, ...record } = n;
+    record.text = record.text.trim();
+    record.updatedAt = new Date().toISOString();
+    await store.putNote(record);
+    note = null;
+    noteDirty = false;
+    toast('Note saved on this device');
+    location.hash = '#/';
+  });
+  $('#n-del').addEventListener('click', async () => {
+    const sure = n.isNew
+      ? !n.text.trim() || (await ask('Discard this note?', 'Discard'))
+      : await ask('Delete this note? This cannot be undone.', 'Delete');
+    if (!sure) return;
+    if (!n.isNew) await store.deleteNote(n.id);
+    note = null;
+    noteDirty = false;
+    location.hash = '#/';
+  });
+  if (n.isNew && !n.text) $('#n-text').focus();
+}
+
 // ---------- routing ----------
 
 async function route() {
@@ -944,14 +1059,24 @@ async function route() {
     current = null;
     dirty = false;
   }
+  const leavingNote = note && noteDirty && note.text.trim() && !hash.startsWith('#/note/');
+  if (leavingNote && !(await ask('Leave without saving this note?', 'Leave', 'Stay'))) {
+    history.replaceState(null, '', note.isNew ? '#/note/new' : `#/note/${note.id}`);
+    return;
+  }
+  if (!hash.startsWith('#/note/')) {
+    note = null;
+    noteDirty = false;
+  }
   $('#editor').hidden = true;
   const tab = hash.startsWith('#/analysis') ? 'analysis' : hash.startsWith('#/settings') ? 'settings' : 'cards';
   // A card has its own bottom bar (save and delete) in place of the tabs.
-  document.body.classList.toggle('card-open', hash.startsWith('#/card/'));
+  document.body.classList.toggle('card-open', hash.startsWith('#/card/') || hash.startsWith('#/note/'));
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   window.scrollTo(0, 0);
   try {
     if (hash.startsWith('#/card/')) await showCard(decodeURIComponent(hash.slice(7)));
+    else if (hash.startsWith('#/note/')) await showNote(decodeURIComponent(hash.slice(7)));
     else if (tab === 'analysis') await showAnalysis();
     else if (tab === 'settings') await showSettings();
     else await showCards();
@@ -970,7 +1095,7 @@ async function route() {
 
 window.addEventListener('hashchange', route);
 window.addEventListener('beforeunload', (e) => {
-  if (dirty) e.preventDefault();
+  if (dirty || (noteDirty && note?.text.trim())) e.preventDefault();
 });
 
 settings = await store.getSettings();

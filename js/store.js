@@ -1,6 +1,6 @@
 // On-device storage (IndexedDB): saved cards and settings.
 
-import { DEFAULT_SETTINGS } from './model.js?v=2026.10.12-14';
+import { DEFAULT_SETTINGS } from './model.js?v=2026.10.13-6';
 
 // Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';
@@ -54,6 +54,23 @@ export const putSettings = (settings) => run('kv', 'readwrite', (s) => s.put(set
 export const getRifle = () => run('kv', 'readonly', (s) => s.get('rifle'));
 export const putRifle = (rifle) => run('kv', 'readwrite', (s) => s.put(rifle, 'rifle'));
 
+// Training notes that stand on their own, not tied to a card. They are kept
+// as one list beside the settings, so the saved cards are not touched and a
+// device with no notes simply has an empty list.
+export async function listNotes() {
+  const notes = await run('kv', 'readonly', (s) => s.get('notes'));
+  return Array.isArray(notes) ? notes.filter((n) => n?.id && typeof n.text === 'string') : [];
+}
+const putNotes = (notes) => run('kv', 'readwrite', (s) => s.put(notes, 'notes'));
+export const getNote = async (id) => (await listNotes()).find((n) => n.id === id);
+export async function putNote(note) {
+  const notes = await listNotes();
+  await putNotes([...notes.filter((n) => n.id !== note.id), note]);
+}
+export async function deleteNote(id) {
+  await putNotes((await listNotes()).filter((n) => n.id !== id));
+}
+
 export async function exportData({ images }) {
   const cards = await listCards();
   const rifle = await getRifle();
@@ -66,6 +83,7 @@ export async function exportData({ images }) {
     cards: images ? cards : cards.map(({ images: _drop, ...rest }) => rest),
     // Rifle photos follow the same choice as card photos.
     rifle: rifle && (images ? rifle : { ...rifle, photos: undefined }),
+    notes: await listNotes(),
   };
 }
 
@@ -84,6 +102,12 @@ export async function importData(data) {
   if (data.rifle) {
     const existing = await getRifle();
     await putRifle({ ...data.rifle, photos: data.rifle.photos ?? existing?.photos ?? {} });
+  }
+  // Notes merge by id too; a backup made before notes existed has none.
+  if (Array.isArray(data.notes)) {
+    for (const note of data.notes) {
+      if (note?.id && typeof note.text === 'string') await putNote(note);
+    }
   }
   return count;
 }
@@ -111,6 +135,7 @@ export async function usage() {
     photoBytes += photos;
     bytes += photos + JSON.stringify({ ...rifle, photos: null }).length;
   }
+  bytes += JSON.stringify(await listNotes()).length;
   let quota = null;
   try {
     quota = (await navigator.storage?.estimate?.())?.quota ?? null;
