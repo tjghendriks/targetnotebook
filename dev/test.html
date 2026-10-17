@@ -44,6 +44,7 @@ const bm = CARDS['2510BM'];
 await run('2510BM white backing', bm, ten, {});
 await run('2510BM rotated + sheared', bm, ten, { rotate: 7, shear: 0.06, pxPerMm: 6 });
 await run('2510BM grey backing', bm, ten, { backing: '#8a8680', rotate: -3 });
+await run('2510BM wooden desk', bm, ten, { backing: '#a8794a', rotate: 2 });
 
 // Pairs: well apart, touching, overlapping, nearly one hole, and wide.
 const pairs = [
@@ -58,6 +59,7 @@ await run('2505CS white backing', cs, pairs, {});
 await run('2505CS rotated + sheared', cs, pairs, { rotate: -5, shear: 0.05, pxPerMm: 6 });
 await run('2505CS upside down', cs, pairs, { rotate: 180 });
 await run('2505CS grey backing', cs, pairs, { backing: '#8a8680', rotate: 3 });
+await run('2505CS wooden desk', cs, pairs, { backing: '#a8794a', rotate: -2 });
 
 for (const [file, type] of [['blank-card.jpg', '2510BM'], ['blank-2505cs.webp', '2505CS']]) {
   try {

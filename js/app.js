@@ -1,14 +1,14 @@
 import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
-  isShot, isMiss, shotValue, shotValues, unaccounted,
+  isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.13-6';
-import * as store from './store.js?v=2026.10.13-6';
-import { scanCard, ScanError } from './detect.js?v=2026.10.13-6';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.13-6';
+} from './model.js?v=2026.10.17-8';
+import * as store from './store.js?v=2026.10.17-8';
+import { scanCard, ScanError } from './detect.js?v=2026.10.17-8';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.17-8';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.13-6';
+const VERSION = '2026.10.17-8';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -27,6 +27,8 @@ const longDate = (iso) => {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 };
+// How close (mm) to a scoring line a detected shot must be to be flagged.
+const BORDERLINE_MM = 0.3;
 const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high';
 
 let settings;
@@ -105,10 +107,12 @@ function csvFor(recs) {
   const rows = ['card_id,card_type,date,name,shot,diagram,x_mm,y_mm,score,placed_by'];
   for (const rec of recs) {
     const card = cardType(rec);
-    for (const { shot: s, number, diagram } of firingSequence(rec)) {
+    for (const { shot: s, number, diagram, slot } of firingSequence(rec)) {
       if (isMiss(s)) rows.push([rec.id, card.id, rec.date, q(rec.name), number, diagram + 1, '', '', 0, 'miss'].join(','));
+      // A cross-fired shot is listed against the diagram it actually landed on.
+      const on = shotOn(rec, slot) + 1;
       if (!isShot(s)) continue;
-      rows.push([rec.id, card.id, rec.date, q(rec.name), number, diagram + 1, s.x.toFixed(2), s.y.toFixed(2), scoreShot(s.x, s.y, card, settings), s.source].join(','));
+      rows.push([rec.id, card.id, rec.date, q(rec.name), number, on, s.x.toFixed(2), s.y.toFixed(2), scoreShot(s.x, s.y, card, settings), s.source].join(','));
     }
   }
   return rows.join('\n') + '\n';
@@ -421,10 +425,31 @@ async function scan(file) {
       date: today(),
       name: '',
       createdAt: new Date().toISOString(),
-      shots: result.diagrams.flatMap((d) => d.shots),
+      // A shot within a fraction of a millimetre of a scoring line is flagged
+      // for a closer look, however sure the detector was of the hole.
+      shots: result.diagrams.flatMap((d) => d.shots).map((s) =>
+        s && scoreMargin(s.x, s.y, card, settings) < BORDERLINE_MM ? { ...s, confidence: 'low', borderline: true } : s),
       images: result.diagrams.map((d) => d.image),
       orderSpec: structuredClone(defaultOrderSpec(settings, card)),
+      // Diagrams with more holes than could be placed (shown on the new scan only, not saved).
+      crowded: [],
     };
+    // Cross-fire: holes beyond what a diagram takes go into the slots of a
+    // diagram where nothing at all was found, marked as being on the crowded one.
+    const per = card.shotsPerDiagram;
+    const empty = card.diagrams.map((_, d) => d)
+      .filter((d) => current.shots.slice(d * per, d * per + per).every((s) => !s))
+      .flatMap((d) => Array.from({ length: per }, (_, j) => d * per + j));
+    result.diagrams.forEach((d, i) => {
+      for (const extra of d.extras ?? []) {
+        const free = empty.shift();
+        if (free === undefined) {
+          if (!current.crowded.includes(i)) current.crowded.push(i);
+          continue;
+        }
+        current.shots[free] = { ...extra, on: i };
+      }
+    });
     dirty = true;
     busy(null);
     if (location.hash === '#/card/new') showCard('new');
@@ -456,24 +481,42 @@ function renderCard() {
   const shots = cardShots(rec);
   const missing = unaccounted(rec);
   const toCheck = rec.shots.filter(unsure).length;
+  // Each notice is [kind, text]: 'check' (amber) asks for a look at doubtful
+  // shots, 'penalty' (red) reports points taken off, '' is general guidance.
   const notes = [];
   if (missing) {
-    notes.push(`${missing} shot${missing === 1 ? ' was' : 's were'} not detected. Tap the ringed diagram${missing === 1 ? '' : 's'} and either place ` +
-      `the shot or confirm there is none. The score is shown once every shot is accounted for.`);
+    notes.push(['', `${missing} shot${missing === 1 ? ' was' : 's were'} not detected. Tap the ringed diagram${missing === 1 ? '' : 's'} and either place ` +
+      `the shot or confirm there is none. The score is shown once every shot is accounted for.`]);
   }
-  if (toCheck) notes.push(`${toCheck} shot${toCheck === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.`);
+  const close = rec.shots.filter((s) => unsure(s) && s.borderline).length;
+  if (toCheck) {
+    notes.push(['check', `${toCheck} shot${toCheck === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.` +
+      (close ? ` ${close} of ${close === 1 ? 'them sits' : 'them sit'} right on a scoring line, too close for a photo to call. ` +
+        'Zoom in on it, or check the card with a gauge.' : '')]);
+  }
+  const penalty = crossFirePenalty(rec);
+  if (penalty) {
+    const busy = card.diagrams.map((_, d) => d).filter((d) => slotsOn(rec, d).filter((i) => isShot(rec.shots[i])).length > card.shotsPerDiagram);
+    notes.push(['penalty', `Cross-shots on diagram${busy.length === 1 ? '' : 's'} ${busy.map((d) => order.indexOf(d) + 1).sort((x, y) => x - y).join(', ')}. ` +
+      `Penalty −${penalty} point${penalty === 1 ? '' : 's'}. −1 per cross-shot, rule 5.3.3.`]);
+  }
+  if (rec.crowded?.length) {
+    const which = rec.crowded.map((d) => order.indexOf(d) + 1).sort((x, y) => x - y);
+    notes.push(['check', `More holes than expected on diagram${which.length === 1 ? '' : 's'} ${which.join(', ')}, and no empty diagram to count them against. ` +
+      `The strongest ${card.shotsPerDiagram === 1 ? 'one is' : 'two are'} placed; check ${which.length === 1 ? 'it' : 'them'} against the card.`]);
+  }
   view.innerHTML = `
     <a class="back" href="#/">‹ Dashboard</a>
     <div class="panel">
       ${cardSvg(rec, card, settings, order)}
       ${missing
         ? `<div class="score-line"><span class="big pending">?</span><span class="of">Score not shown yet</span></div>`
-        : `<div class="score-line"><span class="big">${cardTotal(rec, settings)}</span><span class="of">/ 100</span></div>`}
-      ${notes.map((n) => `<p class="notice">${n}</p>`).join('')}
+        : `<div class="score-line"><span class="big">${cardTotal(rec, settings)}</span><span class="of">/ 100${crossFirePenalty(rec) ? ` (after ${crossFirePenalty(rec)} penalty)` : ''}</span></div>`}
+      ${notes.map(([kind, text]) => `<p class="notice ${kind}">${text}</p>`).join('')}
       <p class="muted">${esc(card.label)}, ${card.gauging} gauging. Tap any diagram to check the shots against the photo and move them if needed. The small numbers are the order fired.</p>
       <div class="row">
         <label class="field">Date<input id="f-date" type="date" value="${esc(rec.date)}"></label>
-        <label class="field">Competition / session<input id="f-name" type="text" maxlength="80" placeholder="e.g. Winter league round 3" value="${esc(rec.name)}"></label>
+        <label class="field">Competition / session<input id="f-name" type="text" maxlength="80" placeholder="e.g. BSSRA Round 1" value="${esc(rec.name)}"></label>
       </div>
       <label class="field notes-field">Notes for this card (optional)<textarea id="f-notes" rows="3" maxlength="4000"
         placeholder="Anything about this card: set-up changes, time limit, technique points to review">${esc(rec.notes ?? '')}</textarea></label>
@@ -538,18 +581,17 @@ function renderCard() {
 }
 
 async function saveCard() {
-  const { isNew, ...record } = current;
+  const { isNew, crowded: _seen, ...record } = current;
   // Saving a new card accepts the detector's placements: shots it was unsure
   // of count as reviewed from here on, whether or not each was opened.
   if (isNew) {
     record.shots = record.shots.map((s) => (unsure(s) ? { ...s, confidence: 'high' } : s));
   }
   await store.putCard(record);
-  current = record;
+  current = null;
   dirty = false;
   toast('Card saved on this device');
-  if (isNew) history.replaceState(null, '', `#/card/${record.id}`);
-  renderCard();
+  location.hash = '#/';
 }
 
 // Turn the whole card through 180 degrees (only for layouts that look the same
@@ -570,7 +612,9 @@ async function flipCard() {
       };
       img.src = url;
     });
-  current.shots = current.shots.map((s) => (isShot(s) ? { ...s, x: -s.x, y: -s.y } : s)).reverse();
+  const last = cardType(current).diagrams.length - 1;
+  const turnOn = (s) => (s && Number.isInteger(s.on) ? { ...s, on: last - s.on } : s);
+  current.shots = current.shots.map((s) => turnOn(isShot(s) ? { ...s, x: -s.x, y: -s.y } : s)).reverse();
   if (current.images) current.images = (await Promise.all(current.images.map(turn))).reverse();
   dirty = true;
   renderCard();
@@ -587,14 +631,31 @@ function openEditor(diagram) {
   const order = cardOrder(current, settings);
   let zoom = 1;
   let drag = null;
-  let active = 0; // which of the diagram's shots is being moved
+  let active = 0; // which of this diagram's shots is being moved
 
-  const slot = (j = active) => diagram * per + j;
+  // The slots shown here: this diagram's own, less any cross-fired onto
+  // another diagram, plus any cross-fired onto this one.
+  let slots = [];
+  const refresh = () => {
+    slots = slotsOn(current, diagram);
+    active = Math.min(active, Math.max(0, slots.length - 1));
+  };
+  const slot = (j = active) => slots[j];
+  const home = (i) => Math.floor(i / per);
+  // This diagram's own slots that hold a shot cross-fired onto another diagram.
+  const away = () => Array.from({ length: per }, (_, j) => diagram * per + j).filter((i) => shotOn(current, i) !== diagram);
+  // A slot that could take an extra shot here: one with nothing in it, on a
+  // diagram with nothing at all on it if possible.
+  const spare = () => {
+    const open = current.shots.map((s, i) => i).filter((i) => !current.shots[i] && home(i) !== diagram);
+    const emptyDiagram = (i) => slotsOn(current, home(i)).every((k) => !current.shots[k]);
+    return open.find(emptyDiagram) ?? open[0];
+  };
   const originFor = (s) => `${((s.x + half) / size) * 100}% ${((half - s.y) / size) * 100}%`;
   const pick = () => {
+    refresh();
     // Start on the first shot that needs attention.
-    const shots = Array.from({ length: per }, (_, j) => current.shots[slot(j)]);
-    const j = shots.findIndex((s) => (!isShot(s) && !isMiss(s)) || unsure(s));
+    const j = slots.findIndex((i) => { const s = current.shots[i]; return (!isShot(s) && !isMiss(s)) || unsure(s); });
     active = j < 0 ? 0 : j;
   };
 
@@ -606,19 +667,26 @@ function openEditor(diagram) {
     const step = order.indexOf(diagram);
     const g = settings.gaugeDia / 2;
     const markR = card.aimingMarkDia / 2;
-    const others = Array.from({ length: per }, (_, j) => j).filter((j) => j !== active && isShot(current.shots[slot(j)]));
+    const others = slots.map((_, j) => j).filter((j) => j !== active && isShot(current.shots[slot(j)]));
+    const extra = (j) => slot(j) !== undefined && home(slot(j)) !== diagram; // cross-fired onto this diagram
+    // Every shot meant for this diagram is counted on another one.
+    const none = !slots.length;
+    const gone = away();
+    const canAdd = spare() !== undefined;
     el.innerHTML = `<div class="ed">
       <div class="ed-head">
-        <span class="ed-score" id="ed-score">${shot ? scoreShot(shot.x, shot.y, card, settings) : miss ? 0 : '?'}</span>
+        <span class="ed-score" id="ed-score">${none ? '–' : shot ? scoreShot(shot.x, shot.y, card, settings) : miss ? 0 : '?'}</span>
         <div class="ed-info"><small>${per > 1 ? `Diagram ${step + 1} of ${order.length}` : `Shot ${step + 1} of ${order.length}`}</small>
-          <small id="ed-pos">${shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm` : miss ? 'Confirmed: no shot here' : 'No shot detected'}</small>
-          <small>${shot ? (shot.source === 'auto' ? `Detected${shot.confidence === 'high' ? '' : ', please check'}` : 'Placed by hand') : miss ? 'Tap the hole if there is one after all' : 'Tap the hole, or confirm there is none'}</small></div>
+          <small id="ed-pos">${none ? 'No shots on this diagram' : shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm` : miss ? 'Confirmed: no shot here' : 'No shot detected'}</small>
+          <small>${none ? 'Its shots are counted elsewhere' : shot ? (shot.source === 'auto' ? `Detected${shot.confidence === 'high' ? '' : ', please check'}` : 'Placed by hand') : miss ? 'Tap the hole if there is one after all' : 'Tap the hole, or confirm there is none'}</small></div>
         <button id="ed-done" class="primary">Done</button>
       </div>
-      ${per > 1 ? `<div class="row pickers">${Array.from({ length: per }, (_, j) => {
+      ${slots.length > 1 ? `<div class="row pickers">${slots.map((_, j) => {
         const s = current.shots[slot(j)];
-        return `<button data-pick="${j}" class="${j === active ? 'primary' : ''}">Shot ${String.fromCharCode(65 + j)}: ${isShot(s) ? scoreShot(s.x, s.y, card, settings) : isMiss(s) ? '0, no shot' : 'to confirm'}</button>`;
+        return `<button data-pick="${j}" class="${j === active ? 'primary' : ''}">Shot ${String.fromCharCode(65 + j)}${extra(j) ? ' (extra)' : ''}: ${isShot(s) ? scoreShot(s.x, s.y, card, settings) : isMiss(s) ? '0, no shot' : 'to confirm'}</button>`;
       }).join('')}</div>` : ''}
+      ${gone.length ? `<p class="hint">${gone.length} shot${gone.length === 1 ? '' : 's'} meant for this diagram ${gone.length === 1 ? 'is' : 'are'} counted on diagram
+        ${[...new Set(gone.map((i) => order.indexOf(shotOn(current, i)) + 1))].join(', ')} as a cross-fire. <button id="ed-back" class="inline">Count ${gone.length === 1 ? 'it' : 'them'} here instead</button></p>` : ''}
       <div class="stage" id="stage">
         <div class="zoomer" id="zoomer" style="transform:scale(${zoom});transform-origin:${shot ? originFor(shot) : '50% 50%'}">
           ${image ? `<img src="${image}" alt="Photo of diagram ${step + 1}">` : ''}
@@ -631,10 +699,10 @@ function openEditor(diagram) {
           </svg>
         </div>
       </div>
-      <p class="hint">${shot
-        ? `Drag anywhere to slide the blue gauge circle over the hole. The fine pale lines are the scoring rings.${per > 1 ? ' The dashed circle is the other shot.' : ''}`
+      <p class="hint">${none ? '' : shot
+        ? `Drag anywhere to slide the blue gauge circle over the hole. The fine pale lines are the scoring rings.${slots.length > 1 ? ' Dashed circles are the other shots.' : ''}`
         : `Tap the centre of the shot hole.${per > 1 ? ' If both shots went through one hole, tap it again for this shot.' : ''}`}</p>
-      <div class="nudge">
+      <div class="nudge" ${none ? 'hidden' : ''}>
         <button data-nx="-0.1" data-ny="0" aria-label="Nudge left">←</button>
         <button data-nx="0" data-ny="0.1" aria-label="Nudge up">↑</button>
         <button data-nx="0" data-ny="-0.1" aria-label="Nudge down">↓</button>
@@ -642,10 +710,13 @@ function openEditor(diagram) {
       </div>
       <div class="row">
         <button id="ed-zoom">${zoom > 1 ? 'Zoom out' : 'Zoom in'}</button>
-        ${shot || miss
-          ? `<button id="ed-remove">${shot ? 'Remove shot' : 'Undo "no shot"'}</button>`
-          : '<button id="ed-miss">No shot here (scores 0)</button>'}
+        ${none ? '' : shot || miss
+          ? `<button id="ed-remove">${shot ? (extra(active) ? 'Remove extra shot' : 'Remove shot') : 'Undo "no shot"'}</button>`
+          : extra(active)
+            ? '<button id="ed-remove">Cancel extra shot</button>'
+            : '<button id="ed-miss">No shot here (scores 0)</button>'}
       </div>
+      ${canAdd ? `<div class="row"><button id="ed-extra">+ Extra shot on this diagram (cross-fire)</button></div>` : ''}
       <div class="row">
         <button id="ed-prev" ${step ? '' : 'disabled'}>‹ Previous</button>
         <button id="ed-next" ${step < order.length - 1 ? '' : 'disabled'}>Next ›</button>
@@ -656,10 +727,12 @@ function openEditor(diagram) {
 
   const setShot = (x, y) => {
     const lim = half - 1;
+    const on = current.shots[slot()]?.on;
     current.shots[slot()] = {
       x: Math.round(Math.max(-lim, Math.min(lim, x)) * 100) / 100,
       y: Math.round(Math.max(-lim, Math.min(lim, y)) * 100) / 100,
       source: 'manual',
+      ...(Number.isInteger(on) ? { on } : {}),
     };
     dirty = true;
   };
@@ -669,6 +742,7 @@ function openEditor(diagram) {
     stage.addEventListener('pointerdown', (e) => {
       const rect = stage.getBoundingClientRect();
       const scale = rect.width / size;
+      if (!slots.length) return;
       const shot = current.shots[slot()];
       if (!isShot(shot)) {
         setShot((e.clientX - rect.left) / scale - half, half - (e.clientY - rect.top) / scale);
@@ -717,9 +791,27 @@ function openEditor(diagram) {
       draw();
     });
     $('#ed-remove')?.addEventListener('click', () => {
+      // An extra shot's slot goes back to its own diagram, empty.
       current.shots[slot()] = null;
       dirty = true;
       zoom = 1;
+      refresh();
+      draw();
+    });
+    $('#ed-extra')?.addEventListener('click', () => {
+      const i = spare();
+      if (i === undefined) return;
+      current.shots[i] = { on: diagram };
+      dirty = true;
+      zoom = 1;
+      refresh();
+      active = slots.indexOf(i);
+      draw();
+    });
+    $('#ed-back')?.addEventListener('click', () => {
+      for (const i of away()) current.shots[i] = null;
+      dirty = true;
+      refresh();
       draw();
     });
     $('#ed-miss')?.addEventListener('click', () => {
@@ -745,7 +837,7 @@ function openEditor(diagram) {
   };
 
   // Looking at a detected shot and moving on counts as checking it.
-  const confirmShots = (which = Array.from({ length: per }, (_, j) => j)) => {
+  const confirmShots = (which = slots.map((_, j) => j)) => {
     for (const j of which) {
       const s = current.shots[slot(j)];
       if (unsure(s)) {
@@ -797,7 +889,7 @@ async function showAnalysis() {
   // Points dropped at each place on the card, whatever order it was shot in.
   const byPlace = card.diagrams.map((_, d) => {
     const scores = recs
-      .flatMap((rec) => rec.shots.slice(d * per, d * per + per))
+      .flatMap((rec) => slotsOn(rec, d).map((i) => rec.shots[i]))
       .filter((s) => isShot(s) || isMiss(s))
       .map((s) => shotValue(s, card, settings));
     return scores.length ? { lost: 10 - mean(scores), shots: scores.length } : null;

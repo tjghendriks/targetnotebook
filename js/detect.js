@@ -4,7 +4,7 @@
 // of the aiming mark, then look for the one region that breaks the diagram's
 // radial symmetry (the shot hole).
 
-import { CARDS } from './model.js?v=2026.10.13-6';
+import { CARDS } from './model.js?v=2026.10.17-8';
 
 export class ScanError extends Error {}
 
@@ -495,6 +495,66 @@ function fitMark(patch, markR) {
   return fit;
 }
 
+// Centre of the printed scoring rings, as an offset (patch mm) from the
+// patch centre. The rings, not the edge of the black, are what a shot is
+// scored against, and on a real card the two can be a little out of line.
+// Each white ring line inside the black is traced along many rays, a circle
+// is fitted to each, and their centres are averaged. Null if too few rings
+// could be traced.
+function fitRings(patch, card) {
+  const { n, ppm, luma } = patch;
+  const c = (n - 1) / 2;
+  const markR = card.aimingMarkDia / 2;
+  const radii = card.rings.map((r) => r.dia / 2 - 0.12).filter((r) => r > 3 && r < markR - 1);
+  const centres = [];
+  for (const R of radii) {
+    let pts = [];
+    for (let a = 0; a < 360; a += 2) {
+      const ca = Math.cos((a * Math.PI) / 180);
+      const sa = Math.sin((a * Math.PI) / 180);
+      // Brightest point within 1.2 mm of where the line should be.
+      let best = -Infinity;
+      let at = 0;
+      let low = Infinity;
+      for (let r = R - 1.2; r <= R + 1.2; r += 0.05) {
+        const v = sample(luma, n, c + ca * r * ppm, c + sa * r * ppm);
+        if (v > best) {
+          best = v;
+          at = r;
+        }
+        low = Math.min(low, v);
+      }
+      // A clear line, not a hole or a numeral sitting across it.
+      if (best - low < 25 || at <= R - 1.15 || at >= R + 1.15) continue;
+      pts.push([ca * at, sa * at]);
+    }
+    let fit = null;
+    for (let iter = 0; iter < 3 && pts.length >= 60; iter++) {
+      let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0, sz = 0;
+      for (const [x, y] of pts) {
+        const z = x * x + y * y;
+        sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+        sxz += x * z; syz += y * z; sz += z;
+      }
+      const [D, E, F] = solve([[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, pts.length]], [-sxz, -syz, -sz]);
+      const ox = -D / 2;
+      const oy = -E / 2;
+      const r = Math.sqrt(Math.max(0, ox * ox + oy * oy - F));
+      fit = { ox, oy, r, points: pts.length };
+      const res = pts.map(([x, y]) => Math.abs(Math.hypot(x - ox, y - oy) - r));
+      const limit = Math.max(0.1, 2.5 * percentile(res, 0.5));
+      pts = pts.filter((_, i) => res[i] <= limit);
+    }
+    if (fit && fit.points >= 60 && Math.abs(fit.r - R) < 0.8) centres.push(fit);
+  }
+  if (centres.length < 2) return null;
+  const ox = centres.reduce((t, f) => t + f.ox, 0) / centres.length;
+  const oy = centres.reduce((t, f) => t + f.oy, 0) / centres.length;
+  // The rings should agree with one another; if not, trust none of them.
+  if (centres.some((f) => Math.hypot(f.ox - ox, f.oy - oy) > 0.5) || Math.hypot(ox, oy) > 1.5) return null;
+  return { ox, oy };
+}
+
 // Least-squares ellipse a x^2 + b xy + c y^2 + d x + e y = 1 through edge
 // points (patch mm, origin inside the ellipse).
 function fitEllipse(pts, markR) {
@@ -916,7 +976,11 @@ function findHoles(patch, card, want) {
       gap: shape.length - shape.width,
       // The two views of the hole agree on where it is.
       agree: Math.hypot(centre.x - disturbed.x, centre.y - disturbed.y) / ppm < 0.8,
-      round: shape.width > 2.5 && shape.width < 7.5,
+      off: Math.hypot(centre.x - disturbed.x, centre.y - disturbed.y) / ppm,
+      width: shape.width,
+      // The visible opening is often smaller than the bullet, more so where
+      // something brown or dark shows through it, so allow down to 1.8 mm.
+      round: shape.width > 1.8 && shape.width < 7.5,
       holeLike: !!outline && disturbed.width > 2.5 && disturbed.width < 8 && disturbed.length < 14,
       spread: shape.length,
     };
@@ -926,20 +990,24 @@ function findHoles(patch, card, want) {
   // handwriting, labels and scorers' marks, so only hole-shaped things count.
   const holes = [];
   const avoid = [];
-  for (let k = 0; k < 10 && holes.filter((d) => d.inside).length < want; k++) {
+  probe.candidates = [];
+  for (let k = 0; k < 10 && holes.filter((d) => d.inside).length < want && holes.length < want + 2; k++) {
     const p = peak(avoid);
     if (p.v < 0.05) break;
     const d = describe(p);
     if (!d) {
+      probe.candidates.push({ x: (p.x - c) / ppm, y: -(p.y - c) / ppm, v: p.v, rejected: 'no outline' });
       avoid.push({ x: p.x, y: p.y, r: 4 * ppm });
       continue;
     }
     avoid.push({ x: d.x, y: d.y, r: (d.spread / 2 + 2.2) * ppm });
     d.inside = Math.hypot(d.x - c, d.y - c) <= (markR + 1) * ppm;
-    if (d.inside || d.holeLike) holes.push(d);
+    probe.candidates.push({ x: (d.x - c) / ppm, y: -(d.y - c) / ppm, v: p.v, inside: d.inside, holeLike: d.holeLike, spread: d.spread, gap: d.gap, agree: d.agree, round: d.round, off: d.off, width: d.width });
+    // Anything much bigger than a hole (a stretch of misprinted ring, a
+    // shadow edge) is not one, wherever it is.
+    if ((d.inside || d.holeLike) && d.spread <= 14) holes.push(d);
   }
-  // Holes in the black come first: something outside it never outranks them.
-  holes.sort((p, q) => q.inside - p.inside || q.v - p.v);
+  holes.sort((p, q) => q.v - p.v);
   const toShot = (x, y, sure) => ({ x: (x - c) / ppm, y: -(y - c) / ppm, confidence: sure ? 'high' : 'low' });
   return { holes, toShot, ppm };
 }
@@ -947,27 +1015,43 @@ function findHoles(patch, card, want) {
 // One shot per diagram: the one hole that stands out from anything else.
 function detectShot(patch, card) {
   const { holes, toShot } = findHoles(patch, card, 2);
-  const a = holes[0];
-  // Only something in the same zone (in or out of the black) is a rival.
-  const b = holes[1]?.inside === a?.inside ? holes[1] : null;
-  if (!a || a.v < 0.08 || (b && a.v < 1.6 * b.v)) return [null];
-  const sure = a.agree && a.round && a.v >= 0.2 && (!b || a.v >= 3 * b.v);
-  return [toShot(a.x, a.y, sure)];
+  // One shot is far more likely in the black than outside it, where
+  // handwriting can look like a hole: prefer the black, and only something
+  // in the same zone counts as a rival.
+  const inBlack = holes.filter((d) => d.inside);
+  const pool = inBlack.length ? inBlack : holes;
+  const [a, b] = pool;
+  if (!a || a.v < 0.08) return [null];
+  // A second hole of similar strength is most likely a real one (a
+  // cross-fire, say): keep the stronger, flag it, and say there are more.
+  const crowded = !!b && a.v < 1.6 * b.v;
+  const sure = !crowded && a.agree && a.round && a.v >= 0.2 && (!b || a.v >= 3 * b.v);
+  const shots = [toShot(a.x, a.y, sure)];
+  // The other holes, for scoring as a cross-fire if another diagram is empty.
+  shots.extras = crowded ? pool.slice(1).filter((h) => h.v >= 0.08 && h.v >= 0.5 * a.v).slice(0, 3).map((h) => toShot(h.x, h.y, false)) : [];
+  return shots;
 }
 
 // Two shots per diagram. They often overlap into one elongated hole: two
 // equal circles a distance d apart make a shape that is d longer than it is
 // wide, with the centres d/2 either side of its centroid along the long axis.
 function detectPair(patch, card) {
-  const { holes, toShot, ppm } = findHoles(patch, card, 3);
-  const [a, b] = holes;
-  const other = holes[2]?.inside ? holes[2] : null;
-  if (!a || a.v < 0.08 || (other && a.v < 1.6 * other.v)) return [null, null];
-  const strong = (k) => k.agree && k.round && k.v >= 0.2 && (!other || k.v >= 3 * other.v);
+  const { holes, toShot, ppm } = findHoles(patch, card, 4);
+  // On a 5-bull card shots in the outer rings are common, so holes in and out
+  // of the black are taken on strength alone.
+  const [a, b, other] = holes;
+  if (!a || a.v < 0.08) return [null, null];
+  // A third hole of similar strength means more than two shots landed here
+  // (a cross-fire, say). Keep the two strongest, flagged, and say so.
+  const crowded = !!other && other.v >= 0.08 && b.v < 1.6 * other.v;
+  const strong = (k) => !crowded && k.agree && k.round && k.v >= 0.2 && (!other || k.v >= 3 * other.v);
 
   // A second, separate hole.
-  if (b && b.v >= 0.08 && b.v >= 0.3 * a.v && (!other || b.v >= 1.6 * other.v)) {
-    return [toShot(a.x, a.y, a.gap < 1 && strong(a)), toShot(b.x, b.y, b.gap < 1 && strong(b))];
+  if (b && b.v >= 0.08 && b.v >= 0.3 * a.v) {
+    const shots = [toShot(a.x, a.y, a.gap < 1 && strong(a)), toShot(b.x, b.y, b.gap < 1 && strong(b))];
+    // The other holes, for scoring as a cross-fire if another diagram is empty.
+    shots.extras = crowded ? holes.slice(2).filter((h) => h.v >= 0.08 && h.v >= 0.5 * b.v).slice(0, 4).map((h) => toShot(h.x, h.y, false)) : [];
+    return shots;
   }
 
   // One elongated hole: the two shots overlap.
@@ -1072,6 +1156,14 @@ async function scanAs(img, card, onProgress, debug) {
         };
       }
     }
+    if (fit) {
+      // Re-centre on the printed rings themselves.
+      const rings = fitRings(extractPatch(img, H, d.x + fit.ox, d.y + fit.oy, 2 * markR + 4, 10, fit.T), card);
+      if (rings) {
+        const [a, b, c, e] = fit.T;
+        fit = { ...fit, ox: fit.ox + a * rings.ox + b * rings.oy, oy: fit.oy + c * rings.ox + e * rings.oy, rings };
+      }
+    }
     const patch = extractPatch(
       img, H, d.x + (fit ? fit.ox : 0), d.y + (fit ? fit.oy : 0), card.patchMm, PATCH_PPM, fit?.T, true
     );
@@ -1080,7 +1172,9 @@ async function scanAs(img, card, onProgress, debug) {
       image: patchToDataUrl(patch, 608),
       aligned: !!fit,
       shots: shots.map((s) => s && { x: round2(s.x), y: round2(s.y), source: 'auto', confidence: s.confidence }),
-      ...(debug ? { patch, fit, map: probe.map } : {}),
+      // Holes beyond the number the diagram should have (a cross-fire).
+      extras: (shots.extras ?? []).map((s) => ({ x: round2(s.x), y: round2(s.y), source: 'auto', confidence: 'low' })),
+      ...(debug ? { patch, fit, map: probe.map, candidates: probe.candidates } : {}),
     });
   }
   return { type: card.id, diagrams, flipped, pixelsPerMm: meanR / markR, size: { w: img.w, h: img.h } };

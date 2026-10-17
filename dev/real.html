@@ -35,12 +35,14 @@ for (const file of list) {
   out.append(box);
   try {
     const t0 = performance.now();
-    const r = await scanCard(`../reference/${file}`, { debug: showMap });
+    // A bare name is looked up in reference/; anything with a folder is relative to this page.
+    const r = await scanCard(file.includes('/') ? file : `../reference/${file}`, { debug: showMap });
     const card = CARDS[r.type];
     const half = card.patchMm / 2;
     let total = 0;
     const cells = r.diagrams.map((d, i) => {
-      const marks = d.shots.map((s) => {
+      const rings = card.rings.map((r) => `<circle r="${r.dia / 2}" fill="none" stroke="#27e0ff" stroke-width="0.08"/>`).join('');
+      const marks = rings + d.shots.map((s) => {
         if (!s) return '';
         total += scoreShot(s.x, s.y, card, DEFAULT_SETTINGS);
         return `<circle cx="${s.x}" cy="${-s.y}" r="2.8" fill="none" stroke="${s.confidence === 'high' ? '#00e5ff' : '#ff9800'}" stroke-width="0.35"/>`;

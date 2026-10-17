@@ -1,7 +1,7 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { scoreShot, isShot, isMiss } from './model.js?v=2026.10.13-6';
+import { scoreShot, isShot, isMiss, slotsOn } from './model.js?v=2026.10.17-8';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';
@@ -38,7 +38,8 @@ export function cardSvg(rec, card, settings, order) {
   const reach = diagramReach(card);
   const diagrams = card.diagrams
     .map((d, i) => {
-      const shots = rec.shots.slice(i * per, i * per + per);
+      // The shots on this diagram, including any cross-fired onto it.
+      const shots = slotsOn(rec, i).map((j) => rec.shots[j]);
       const placed = shots.filter(isShot);
       const open = shots.filter((s) => !isShot(s) && !isMiss(s)).length;
       const check = open > 0 || placed.some(unsure);
