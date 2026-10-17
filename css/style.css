@@ -408,3 +408,15 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; min-height: 
 
 /* Small text-style button inside a line of help text */
 .ed button.inline { display: inline-flex; min-height: 0; padding: 4px 10px; margin-top: 6px; font-size: 13px; }
+
+/* Analysis: choosing cards */
+.filter-extra { margin-top: 10px; }
+.filter-summary { margin: 10px 2px 0; }
+.pick { margin-top: 12px; }
+.pick summary { cursor: pointer; font-weight: 600; color: var(--blue-deep); padding: 6px 0; }
+.pick-all { margin: 6px 0 8px; }
+.pick-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; display: grid; gap: 6px; }
+.pick-list label.check { margin: 0; display: grid; grid-template-columns: 22px auto 1fr auto; gap: 10px; font-weight: 500; }
+.pick-date { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-total { font-weight: 700; color: var(--blue-deep); font-variant-numeric: tabular-nums; }
