@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.18-9';
-import * as store from './store.js?v=2026.10.18-9';
-import { scanCard, ScanError } from './detect.js?v=2026.10.18-9';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-9';
+} from './model.js?v=2026.10.18-10';
+import * as store from './store.js?v=2026.10.18-10';
+import { scanCard, ScanError } from './detect.js?v=2026.10.18-10';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-10';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.18-9';
+const VERSION = '2026.10.18-10';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -899,7 +899,11 @@ async function showAnalysis() {
   // Different cards have different rings and gauging, so they are analysed separately.
   const card = types.find((c) => c.id === scope.type) ?? types[0] ?? CARDS[DEFAULT_TYPE];
   const all = everything.filter((rec) => cardType(rec) === card);
-  const names = [...new Set(all.map((rec) => rec.name).filter(Boolean))].sort();
+  // Competition names used on each card type. All of them are offered, so a
+  // name used only on another type of card can still be found; choosing it
+  // switches to that card type.
+  const namesOf = (c) => [...new Set(everything.filter((rec) => cardType(rec) === c).map((rec) => rec.name).filter(Boolean))].sort();
+  const names = namesOf(card);
   // Cards that pass the competition filter, newest first: the pool the other choices pick from.
   const pool = scope.name ? all.filter((rec) => rec.name === scope.name) : all;
   let recs = pool;
@@ -963,7 +967,10 @@ async function showAnalysis() {
       </select></label>
       <label class="field">Competition / session<select id="a-name">
         <option value="">All</option>
-        ${names.map((n) => `<option value="${esc(n)}" ${scope.name === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+        ${types.length > 1
+          ? types.map((c) => namesOf(c).length ? `<optgroup label="${esc(c.label)}">${namesOf(c).map((n) =>
+              `<option value="${esc(c.id)}|${esc(n)}" ${c === card && scope.name === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}</optgroup>` : '').join('')
+          : names.map((n) => `<option value="${esc(card.id)}|${esc(n)}" ${scope.name === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
       </select></label>
     </div>
     ${scope.last === 'count' ? `<div class="row filter-extra">
@@ -1046,7 +1053,18 @@ async function showAnalysis() {
     if (scope.last === 'count') scope.count = Math.min(Math.max(1, scope.count), Math.max(1, pool.length));
     refilter();
   });
-  $('#a-name').addEventListener('change', (e) => { scope.name = e.target.value; refilter(); });
+  $('#a-name').addEventListener('change', (e) => {
+    // Values are "<card type>|<name>", or empty for all.
+    const at = e.target.value.indexOf('|');
+    const type = at < 0 ? scope.type : e.target.value.slice(0, at);
+    const name = at < 0 ? '' : e.target.value.slice(at + 1);
+    if (type && type !== card.id) {
+      // A different card type: its cards were not in any hand-picked set.
+      scope = { ...scope, type, picked: null, last: scope.last === 'pick' ? 'all' : scope.last };
+    }
+    scope.name = name;
+    refilter();
+  });
   $('#a-count')?.addEventListener('change', (e) => {
     const n = Math.round(Number(e.target.value));
     if (n >= 1) scope.count = n;
