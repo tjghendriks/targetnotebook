@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.18-8';
-import * as store from './store.js?v=2026.10.18-8';
-import { scanCard, ScanError } from './detect.js?v=2026.10.18-8';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-8';
+} from './model.js?v=2026.10.18-9';
+import * as store from './store.js?v=2026.10.18-9';
+import { scanCard, ScanError } from './detect.js?v=2026.10.18-9';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-9';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.18-8';
+const VERSION = '2026.10.18-9';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -515,8 +515,8 @@ function renderCard() {
   const penalty = crossFirePenalty(rec);
   if (penalty) {
     const busy = card.diagrams.map((_, d) => d).filter((d) => slotsOn(rec, d).filter((i) => isShot(rec.shots[i])).length > card.shotsPerDiagram);
-    notes.push(['penalty', `Cross-shots on diagram${busy.length === 1 ? '' : 's'} ${busy.map((d) => order.indexOf(d) + 1).sort((x, y) => x - y).join(', ')}. ` +
-      `Penalty −${penalty} point${penalty === 1 ? '' : 's'}. −1 per cross-shot, rule 5.3.3.`]);
+    notes.push(['penalty', `Cross-shots on diagram${busy.length === 1 ? '' : 's'} ${busy.map((d) => order.indexOf(d) + 1).sort((x, y) => x - y).join(', ')}.<br>` +
+      `Penalty −${penalty} point${penalty === 1 ? '' : 's'}.<br>−1 per cross-shot, rule 5.2.1.`]);
   }
   if (rec.crowded?.length) {
     const which = rec.crowded.map((d) => order.indexOf(d) + 1).sort((x, y) => x - y);
