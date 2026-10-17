@@ -167,6 +167,17 @@ export const shotValues = (card) => [...card.rings.map((r) => r.score), ...(card
 // Each entry in a card's `shots` is one of: a placed shot { x, y, ... }, a
 // confirmed miss { miss: true } (no hole on the diagram, scores 0), or null
 // (not yet accounted for: undetected and not confirmed either way).
+// How far (mm) a shot's centre is from the nearest point at which its score
+// would change. Below a few tenths of a millimetre a photo cannot settle it.
+export function scoreMargin(x, y, card, settings = DEFAULT_SETTINGS) {
+  const d = Math.hypot(x, y);
+  const g = settings.gaugeDia / 2;
+  const reach = card.gauging === 'inward' ? d - g : d + g;
+  let margin = Math.min(...card.rings.map((r) => Math.abs(reach - r.dia / 2)));
+  if (card.fringe) margin = Math.min(margin, Math.abs(d - g - card.fringe.dia / 2));
+  return margin;
+}
+
 export const isShot = (s) => !!s && Number.isFinite(s.x) && Number.isFinite(s.y);
 export const isMiss = (s) => !!s?.miss;
 export const cardShots = (rec) => rec.shots.filter(isShot);
@@ -174,9 +185,28 @@ export const shotValue = (s, card, settings) => (isShot(s) ? scoreShot(s.x, s.y,
 // Shots still to be placed or confirmed as misses. A card has no total until this is 0.
 export const unaccounted = (rec) => rec.shots.filter((s) => !isShot(s) && !isMiss(s)).length;
 
+// Which diagram a shot is on. Normally the one its slot belongs to, but a
+// cross-fired shot (more shots on one diagram than it should take, fewer on
+// another) is stored in the empty diagram's slot and marked with `on`.
+// Cards saved before cross-fire was handled have no `on` anywhere.
+export function shotOn(rec, i) {
+  const card = cardType(rec);
+  const on = rec.shots[i]?.on;
+  return Number.isInteger(on) && on >= 0 && on < card.diagrams.length ? on : Math.floor(i / card.shotsPerDiagram);
+}
+export const slotsOn = (rec, d) => rec.shots.map((_, i) => i).filter((i) => shotOn(rec, i) === d);
+
+// NSRA: with no more shots on the card than specified, every shot is scored
+// but each one over the number a diagram should take costs a point.
+export function crossFirePenalty(rec) {
+  const card = cardType(rec);
+  return card.diagrams.reduce((t, _, d) =>
+    t + Math.max(0, slotsOn(rec, d).filter((i) => isShot(rec.shots[i])).length - card.shotsPerDiagram), 0);
+}
+
 export function cardTotal(rec, settings) {
   const card = cardType(rec);
-  return rec.shots.reduce((t, s) => t + shotValue(s, card, settings), 0);
+  return rec.shots.reduce((t, s) => t + shotValue(s, card, settings), 0) - crossFirePenalty(rec);
 }
 
 export function groupStats(shots) {

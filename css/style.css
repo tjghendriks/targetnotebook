@@ -211,6 +211,10 @@ label.field input, label.field select {
   font-weight: 600;
   margin: 8px 0;
 }
+/* Shots to look at again */
+.notice.check { color: #7a4a00; background: #fff1d6; border: 1px solid #f1c46b; }
+/* Points taken off */
+.notice.penalty { color: #9b1c1c; background: #fde8e8; border: 1px solid #f3b1b1; }
 
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, td { text-align: right; padding: 8px 6px; border-bottom: 1px solid var(--line); font-size: 14px; }
@@ -401,3 +405,6 @@ label.field input[type="date"] {
   text-align: left;
 }
 input[type="date"]::-webkit-date-and-time-value { text-align: left; min-height: 1.2em; }
+
+/* Small text-style button inside a line of help text */
+.ed button.inline { display: inline-flex; min-height: 0; padding: 4px 10px; margin-top: 6px; font-size: 13px; }

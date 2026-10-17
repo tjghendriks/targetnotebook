@@ -3,3 +3,6 @@
 # Scans of the NSRA card (third-party copyright), kept local only
 *.pdf
 reference/
+
+# Real shot-card photos for testing the detector (may show names), kept local only
+dev/cards/
