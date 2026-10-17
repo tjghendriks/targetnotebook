@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.17-8';
-import * as store from './store.js?v=2026.10.17-8';
-import { scanCard, ScanError } from './detect.js?v=2026.10.17-8';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.17-8';
+} from './model.js?v=2026.10.18-5';
+import * as store from './store.js?v=2026.10.18-5';
+import { scanCard, ScanError } from './detect.js?v=2026.10.18-5';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-5';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.17-8';
+const VERSION = '2026.10.18-5';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -854,7 +854,10 @@ function openEditor(diagram) {
 
 // ---------- analysis ----------
 
-let scope = { type: null, last: 'all', name: '' };
+// Which cards Analysis looks at. `last` is 'all', a number of latest cards
+// as text, or one of the custom modes: 'count' (the latest `count` cards),
+// 'dates' (between `from` and `to`, inclusive) or 'pick' (the ids in `picked`).
+let scope = { type: null, last: 'all', name: '', count: 10, from: '', to: '', picked: null };
 
 async function showAnalysis() {
   const everything = await store.listCards();
@@ -863,8 +866,14 @@ async function showAnalysis() {
   const card = types.find((c) => c.id === scope.type) ?? types[0] ?? CARDS[DEFAULT_TYPE];
   const all = everything.filter((rec) => cardType(rec) === card);
   const names = [...new Set(all.map((rec) => rec.name).filter(Boolean))].sort();
-  let recs = scope.name ? all.filter((rec) => rec.name === scope.name) : all;
-  if (scope.last !== 'all') recs = recs.slice(0, Number(scope.last));
+  // Cards that pass the competition filter, newest first: the pool the other choices pick from.
+  const pool = scope.name ? all.filter((rec) => rec.name === scope.name) : all;
+  let recs = pool;
+  if (scope.last === 'count') recs = pool.slice(0, Math.max(1, scope.count));
+  else if (scope.last === 'dates') recs = pool.filter((rec) => (!scope.from || rec.date >= scope.from) && (!scope.to || rec.date <= scope.to));
+  else if (scope.last === 'pick') recs = pool.filter((rec) => scope.picked?.has(rec.id));
+  else if (scope.last !== 'all') recs = pool.slice(0, Number(scope.last));
+  const span = recs.length ? [recs.at(-1).date, recs[0].date] : null;
   const shots = recs.flatMap(cardShots);
   const score = (s) => scoreShot(s.x, s.y, card, settings);
   // Only cards with every shot accounted for have a total.
@@ -914,14 +923,39 @@ async function showAnalysis() {
         ${types.map((c) => `<option value="${c.id}" ${c === card ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}
       </select></label>` : ''}
       <label class="field">Cards<select id="a-last">
-        ${[['all', 'All cards'], ['1', 'Latest card'], ['5', 'Last 5'], ['10', 'Last 10'], ['20', 'Last 20']]
+        ${[['all', 'All cards'], ['1', 'Latest card'], ['5', 'Last 5'], ['10', 'Last 10'], ['20', 'Last 20'],
+          ['count', 'Custom number…'], ['dates', 'Date range…'], ['pick', 'Choose cards…']]
           .map(([v, t]) => `<option value="${v}" ${scope.last === v ? 'selected' : ''}>${t}</option>`).join('')}
       </select></label>
       <label class="field">Competition / session<select id="a-name">
         <option value="">All</option>
         ${names.map((n) => `<option value="${esc(n)}" ${scope.name === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
       </select></label>
-    </div></div>
+    </div>
+    ${scope.last === 'count' ? `<div class="row filter-extra">
+      <label class="field">Latest cards<input id="a-count" type="number" inputmode="numeric" min="1" max="${pool.length}" value="${scope.count}"></label>
+    </div>` : ''}
+    ${scope.last === 'dates' ? `<div class="row filter-extra">
+      <label class="field">From<input id="a-from" type="date" value="${esc(scope.from)}"></label>
+      <label class="field">To<input id="a-to" type="date" value="${esc(scope.to)}"></label>
+    </div>` : ''}
+    ${scope.last === 'pick' ? `<details class="pick" open>
+      <summary>${recs.length} of ${pool.length} card${pool.length === 1 ? '' : 's'} chosen</summary>
+      <div class="row pick-all"><button id="a-all">Choose all</button><button id="a-none">Choose none</button></div>
+      <ul class="pick-list">
+        ${pool.map((rec) => {
+          const open = unaccounted(rec);
+          return `<li><label class="check"><input type="checkbox" data-pick-card="${esc(rec.id)}" ${scope.picked?.has(rec.id) ? 'checked' : ''}>
+            <span class="pick-date">${esc(niceDate(rec.date))}</span>
+            <span class="pick-name">${esc(rec.name || '')}</span>
+            <span class="pick-total">${open ? '?' : cardTotal(rec, settings)}</span></label></li>`;
+        }).join('')}
+      </ul>
+    </details>` : ''}
+    <p class="muted filter-summary">${recs.length
+      ? `Analysing ${recs.length} card${recs.length === 1 ? '' : 's'}${span[0] === span[1] ? `, from ${esc(niceDate(span[0]))}` : `, ${esc(niceDate(span[0]))} to ${esc(niceDate(span[1]))}`}.`
+      : 'No cards chosen.'}</p>
+    </div>
     ${recs.length ? `
     <h2>Scores</h2>
     <div class="panel">
@@ -957,9 +991,42 @@ async function showAnalysis() {
     </div>
     <h2>Group, all ${shots.length} shots overlaid</h2>
     <div class="panel">${statsBlock(card, shots)}</div>` : '<p class="muted">No saved cards match this selection.</p>'}`;
-  $('#a-type')?.addEventListener('change', (e) => { scope = { type: e.target.value, last: 'all', name: '' }; showAnalysis(); });
-  $('#a-last').addEventListener('change', (e) => { scope.last = e.target.value; showAnalysis(); });
-  $('#a-name').addEventListener('change', (e) => { scope.name = e.target.value; showAnalysis(); });
+  // Redraw with the new choice, staying where the page was scrolled to.
+  const refilter = () => {
+    const y = window.scrollY;
+    showAnalysis().then(() => window.scrollTo(0, y));
+  };
+  $('#a-type')?.addEventListener('change', (e) => {
+    scope = { ...scope, type: e.target.value, last: 'all', name: '', picked: null };
+    refilter();
+  });
+  $('#a-last').addEventListener('change', (e) => {
+    scope.last = e.target.value;
+    // Start each custom choice from something sensible: the full date span,
+    // or every card ticked.
+    if (scope.last === 'dates' && !scope.from && !scope.to && pool.length) {
+      scope.from = pool.at(-1).date;
+      scope.to = pool[0].date;
+    }
+    if (scope.last === 'pick' && !scope.picked) scope.picked = new Set(pool.map((rec) => rec.id));
+    if (scope.last === 'count') scope.count = Math.min(Math.max(1, scope.count), Math.max(1, pool.length));
+    refilter();
+  });
+  $('#a-name').addEventListener('change', (e) => { scope.name = e.target.value; refilter(); });
+  $('#a-count')?.addEventListener('change', (e) => {
+    const n = Math.round(Number(e.target.value));
+    if (n >= 1) scope.count = n;
+    refilter();
+  });
+  $('#a-from')?.addEventListener('change', (e) => { scope.from = e.target.value; refilter(); });
+  $('#a-to')?.addEventListener('change', (e) => { scope.to = e.target.value; refilter(); });
+  view.querySelectorAll('[data-pick-card]').forEach((box) => box.addEventListener('change', () => {
+    if (box.checked) scope.picked.add(box.dataset.pickCard);
+    else scope.picked.delete(box.dataset.pickCard);
+    refilter();
+  }));
+  $('#a-all')?.addEventListener('click', () => { scope.picked = new Set(pool.map((rec) => rec.id)); refilter(); });
+  $('#a-none')?.addEventListener('click', () => { scope.picked = new Set(); refilter(); });
 }
 
 // ---------- settings ----------
