@@ -2,13 +2,13 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.18-5';
-import * as store from './store.js?v=2026.10.18-5';
-import { scanCard, ScanError } from './detect.js?v=2026.10.18-5';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-5';
+} from './model.js?v=2026.10.18-8';
+import * as store from './store.js?v=2026.10.18-8';
+import { scanCard, ScanError } from './detect.js?v=2026.10.18-8';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-8';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.18-5';
+const VERSION = '2026.10.18-8';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -27,6 +27,24 @@ const longDate = (iso) => {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 };
+// Competitions usually shot at that time of year, offered as suggestions for
+// a card's competition name. Months are 1 to 12, inclusive.
+const SEASONAL = [
+  { name: 'BSSRA Autumn League', from: 9, to: 11 },
+  { name: 'Prince William of Wales', from: 11, to: 12 },
+  { name: 'NSRA/Eley Round 1', from: 1, to: 2 },
+  { name: 'BSSRA Spring League', from: 1, to: 3 },
+  { name: 'NSRA/Eley Round 2', from: 3, to: 4 },
+  { name: 'BSSRA Summer League', from: 4, to: 6 },
+];
+// Shown as buttons under the field rather than through the browser's own
+// suggestion list, which iPhones replace with their own AutoFill.
+function competitionIdeas(date) {
+  const month = Number(String(date).slice(5, 7)) || new Date().getMonth() + 1;
+  const names = [...SEASONAL.filter((c) => month >= c.from && month <= c.to).map((c) => c.name), 'Practice'];
+  return names.map((n) => `<button type="button" class="idea" data-idea="${esc(n)}">${esc(n)}</button>`).join('');
+}
+
 // How close (mm) to a scoring line a detected shot must be to be flagged.
 const BORDERLINE_MM = 0.3;
 const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high';
@@ -516,7 +534,13 @@ function renderCard() {
       <p class="muted">${esc(card.label)}, ${card.gauging} gauging. Tap any diagram to check the shots against the photo and move them if needed. The small numbers are the order fired.</p>
       <div class="row">
         <label class="field">Date<input id="f-date" type="date" value="${esc(rec.date)}"></label>
-        <label class="field">Competition / session<input id="f-name" type="text" maxlength="80" placeholder="e.g. BSSRA Round 1" value="${esc(rec.name)}"></label>
+        <label class="field">Competition / session<input id="f-event" type="text" maxlength="80"
+          autocomplete="off" autocorrect="off" spellcheck="false" data-form-type="other"
+          placeholder="e.g. Practice, BSSRA Autumn League" value="${esc(rec.name)}"></label>
+      </div>
+      <div class="ideas-box">
+        <span class="ideas-label" id="f-ideas-label">Suggestions</span>
+        <div class="ideas" id="f-ideas" role="group" aria-labelledby="f-ideas-label">${competitionIdeas(rec.date)}</div>
       </div>
       <label class="field notes-field">Notes for this card (optional)<textarea id="f-notes" rows="3" maxlength="4000"
         placeholder="Anything about this card: set-up changes, time limit, technique points to review">${esc(rec.notes ?? '')}</textarea></label>
@@ -549,14 +573,24 @@ function renderCard() {
   view.querySelectorAll('.dg').forEach((g) => g.addEventListener('click', () => openEditor(Number(g.dataset.d))));
   const touch = () => {
     rec.date = $('#f-date').value || today();
-    rec.name = $('#f-name').value.trim();
+    rec.name = $('#f-event').value.trim();
     rec.notes = $('#f-notes').value.trim();
     dirty = true;
     $('#save').disabled = false;
     $('#save').textContent = rec.isNew ? 'Save card' : 'Save changes';
   };
   $('#f-date').addEventListener('input', touch);
-  $('#f-name').addEventListener('input', touch);
+  // The suggestions follow the card's month; tapping one fills the box.
+  const wireIdeas = () => $('#f-ideas').querySelectorAll('[data-idea]').forEach((b) => b.addEventListener('click', () => {
+    $('#f-event').value = b.dataset.idea;
+    touch();
+  }));
+  $('#f-date').addEventListener('input', () => {
+    $('#f-ideas').innerHTML = competitionIdeas(rec.date);
+    wireIdeas();
+  });
+  wireIdeas();
+  $('#f-event').addEventListener('input', touch);
   $('#f-notes').addEventListener('input', touch);
   $('#save').addEventListener('click', saveCard);
   $('#del').addEventListener('click', async () => {
