@@ -1,7 +1,7 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { scoreShot, isShot, isMiss, slotsOn } from './model.js?v=2026.10.17-8';
+import { scoreShot, isShot, isMiss, slotsOn } from './model.js?v=2026.10.18-4';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';
@@ -121,6 +121,36 @@ export function positionSvg(card, lost) {
     .join('');
   return `<svg class="card-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
     <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="${PAPER}"/>${marks}
+  </svg>`;
+}
+
+// The diagnosis chart as a clock: each fault's span is shaded by how many
+// thrown shots went that way, with its letter and that count. Spans overlap
+// as on the chart, so the overlaps show darker. For a left-handed shooter the
+// chart is mirrored, so the picture still matches the direction shots went.
+export function faultClockSvg(faults, tally, leftHanded) {
+  const R = 46;
+  const most = Math.max(1, ...faults.map((x) => tally.get(x.key)));
+  const pt = (deg, r) => {
+    const a = (((leftHanded ? 360 - deg : deg) - 90) * Math.PI) / 180;
+    return [f(r * Math.cos(a)), f(r * Math.sin(a))];
+  };
+  const spans = faults.map((x) => {
+    const to = x.to < x.from ? x.to + 360 : x.to;
+    const [x1, y1] = pt(x.from, R);
+    const [x2, y2] = pt(to, R);
+    const n = tally.get(x.key);
+    const mid = (x.from + to) / 2;
+    const [lx, ly] = pt(mid, R * 0.66);
+    return {
+      wedge: `<path d="M0 0L${x1} ${y1}A${R} ${R} 0 0 ${leftHanded ? 0 : 1} ${x2} ${y2}Z" class="fault-span" style="fill-opacity:${f(n ? 0.12 + 0.5 * (n / most) : 0.05)}"/>`,
+      label: `<text x="${lx}" y="${f(Number(ly) - 3.5)}" class="fault-key">${x.key}</text>
+        <text x="${lx}" y="${f(Number(ly) + 4.5)}" class="fault-count">${n}</text>`,
+    };
+  });
+  return `<svg class="fault-clock" viewBox="-52 -52 104 104" xmlns="http://www.w3.org/2000/svg">
+    ${spans.map((x) => x.wedge).join('')}<circle r="${R}" class="fault-rim"/><circle r="2" class="fault-centre"/>
+    ${spans.map((x) => x.label).join('')}
   </svg>`;
 }
 

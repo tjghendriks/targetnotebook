@@ -2,13 +2,14 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.17-8';
-import * as store from './store.js?v=2026.10.17-8';
-import { scanCard, ScanError } from './detect.js?v=2026.10.17-8';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.17-8';
+} from './model.js?v=2026.10.18-4';
+import * as store from './store.js?v=2026.10.18-4';
+import { diagnose, sided, FAULTS as FAULT_LIST } from './diagnose.js?v=2026.10.18-4';
+import { scanCard, ScanError } from './detect.js?v=2026.10.18-4';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg, faultClockSvg } from './render.js?v=2026.10.18-4';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.17-8';
+const VERSION = '2026.10.18-4';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -140,6 +141,37 @@ function statsBlock(card, shots) {
       <p class="muted">The group centre is ${Math.abs(st.mx).toFixed(1)} mm ${st.mx >= 0 ? 'right' : 'left'} and ${Math.abs(st.my).toFixed(1)} mm ${st.my >= 0 ? 'high' : 'low'}.
       One click moves the shot ${corr.clickMm.toFixed(2)} mm at 25 yards. Directions say which way the shots need to move.</p>
     </div>`;
+}
+
+// Suggested technique faults, from the direction shots were thrown from the group.
+function hintsBlock(shots) {
+  const leftHanded = settings.handedness === 'left';
+  const d = diagnose(shots, { leftHanded });
+  if (!d.enough) return `<p class="muted">At least 10 shots are needed to look for a pattern; this selection has ${d.shots}.</p>`;
+  // A direction on the card (clock angle) as the nearest hour.
+  const hour = (angle) => {
+    const h = Math.round(angle / 30) % 12;
+    return h === 0 ? 12 : h;
+  };
+  const say = (text) => esc(sided(text, leftHanded));
+  const lines = [];
+  if (d.strung) {
+    const [ha, hb] = d.strung.angles.map(hour).sort((x, y) => x - y);
+    lines.push(`<li><b>Your group is strung out between about ${ha} and ${hb} o'clock</b>, about ${d.strung.ratio.toFixed(1)} times longer than it is wide.
+      ${d.strung.ends.map((x) => `<span>Shots ${say(x.way)}: this may indicate that ${say(x.cause)}.</span>`).join('')}</li>`);
+  }
+  for (const x of d.thrown) {
+    lines.push(`<li><b>${x.count} of your ${d.wide} wide shots went ${say(x.way)} (about ${hour(x.angle)} o'clock).</b>
+      <span>This may indicate that ${say(x.cause)}.</span></li>`);
+  }
+  return `
+    ${faultClockSvg(FAULT_LIST, d.tally, leftHanded)}
+    ${lines.length
+      ? `<ul class="hints">${lines.join('')}</ul>`
+      : `<p>No direction stands out: the ${d.wide} shot${d.wide === 1 ? '' : 's'} that went wide of the group ${d.wide === 1 ? 'is' : 'are'} not bunched on one side, and the group is not strung out.</p>`}
+    <p class="muted">Suggestions only, from the rifle Rapid Diagnosis Chart (Fuller Fig. 12a)${leftHanded ? ', mirrored because Settings says you shoot left-handed' : ''}.
+      They look at shots more than 1.5 times the mean radius from the group's centre, and at the group's shape.
+      The numbers show how many wide shots went each way; as on the chart, neighbouring areas overlap, so a shot near a boundary counts in both.${d.shots < 30 ? ' With fewer than 30 shots a pattern can easily be chance.' : ''}</p>`;
 }
 
 // A firing-order chooser: a picture of the card for each method (tap to
@@ -956,7 +988,9 @@ async function showAnalysis() {
         : '<p class="muted">No shots in this selection yet.</p>'}
     </div>
     <h2>Group, all ${shots.length} shots overlaid</h2>
-    <div class="panel">${statsBlock(card, shots)}</div>` : '<p class="muted">No saved cards match this selection.</p>'}`;
+    <div class="panel">${statsBlock(card, shots)}</div>
+    <h2>Technique hints</h2>
+    <div class="panel">${hintsBlock(shots)}</div>` : '<p class="muted">No saved cards match this selection.</p>'}`;
   $('#a-type')?.addEventListener('change', (e) => { scope = { type: e.target.value, last: 'all', name: '' }; showAnalysis(); });
   $('#a-last').addEventListener('change', (e) => { scope.last = e.target.value; showAnalysis(); });
   $('#a-name').addEventListener('change', (e) => { scope.name = e.target.value; showAnalysis(); });
