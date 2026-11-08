@@ -46,7 +46,28 @@ body {
 }
 @media (min-width: 760px) { .bar { margin: 12px auto 0; } }
 .bar h1 { font-size: 19px; font-weight: 700; letter-spacing: 0.01em; margin: 0; }
-.bar .sub { font-size: 12px; font-weight: 500; opacity: 0.8; white-space: nowrap; }
+.bar .sub { font-size: 12px; font-weight: 500; opacity: 0.8; white-space: nowrap; margin-left: auto; }
+/* What's new: small and quiet, until there is something new to read. */
+.news {
+  align-self: center; position: relative; flex: none;
+  min-height: 30px; padding: 0 11px; font-size: 13px; font-weight: 600;
+  color: #fff; background: rgba(255, 255, 255, 0.16); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 15px;
+}
+.news.fresh { background: #fff; color: var(--blue-deep); border-color: #fff; }
+.news.fresh::after {
+  content: ''; position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%;
+  background: #f0a020; box-shadow: 0 0 0 2px var(--blue); animation: news-pulse 1.6s ease-in-out infinite;
+}
+@keyframes news-pulse { 50% { transform: scale(1.35); } }
+@media (prefers-reduced-motion: reduce) { .news.fresh::after { animation: none; } }
+@media (max-width: 400px) { .bar .sub { display: none; } }
+.news-box { max-height: min(80vh, 640px); display: grid; grid-template-rows: auto 1fr auto; gap: 12px; }
+.news-box h2 { margin: 0; font-size: 20px; text-transform: none; letter-spacing: 0; color: var(--ink); }
+.news-list { overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.news-list h3 { margin: 12px 0 4px; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.news-list section:first-child h3 { margin-top: 0; }
+.news-list ul { margin: 0; padding-left: 20px; display: grid; gap: 5px; font-size: 15px; line-height: 1.4; }
+.news-box .row { justify-content: flex-end; }
 
 main { max-width: 760px; margin: 0 auto; padding: 16px; }
 
@@ -304,7 +325,8 @@ label.check input { width: 20px; height: 20px; accent-color: var(--blue); }
 h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 20px 4px 8px; }
 
 /* Add card menu */
-.add { margin-bottom: 14px; }
+/* No box of its own, so the buttons inside can stay stuck at the top for the whole page. */
+.add { display: contents; }
 .top-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .top-actions button {
   min-height: 60px; padding: 0 12px; justify-content: flex-start; gap: 10px;
@@ -336,6 +358,7 @@ h3 { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: 
 .rifle .field { display: block; font-size: 13px; color: var(--muted); font-weight: 600; }
 .stepper { display: grid; grid-template-columns: 52px 1fr 52px; gap: 8px; margin-top: 5px; }
 .stepper button { min-height: 46px; padding: 0; font-size: 22px; color: var(--blue-deep); }
+.stepper button:disabled { opacity: 0.35; }
 .stepper input {
   min-height: 46px; width: 100%; text-align: center; font: inherit; font-weight: 700; font-size: 18px; color: var(--ink);
   background: var(--tile); border: 1px solid var(--line); border-radius: var(--radius-sm);
@@ -425,4 +448,29 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; min-height: 
 .ideas-box { margin-top: 8px; }
 .ideas-label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 2px 4px; }
 .ideas { display: flex; flex-wrap: wrap; gap: 6px; }
-.idea { min-height: 34px; padding: 0 12px; font-size: 14px; font-weight: 600; border-radius: 17px; background: var(--tile); color: var(--blue-deep); }
+.idea { min-height: 36px; padding: 0 14px; font-size: 14px; font-weight: 600; border-radius: 18px; background: var(--blue-soft); color: var(--blue-deep); border: 1px solid #9dbdf0; }
+.idea::before { content: '+'; margin-right: 6px; font-weight: 700; color: var(--blue); }
+
+/* Kept in view while scrolling: the way back from a card or note, and the
+   Dashboard's two main buttons. */
+.back-bar {
+  position: sticky; top: 0; z-index: 6;
+  margin: -16px -16px 12px; padding: calc(8px + env(safe-area-inset-top)) 16px 8px;
+  background: var(--bg);
+  box-shadow: 0 1px 0 var(--line);
+}
+.back-bar .back { padding: 4px 4px; }
+.top-actions {
+  position: sticky; top: 0; z-index: 6;
+  margin: 0 -16px 6px; padding: calc(8px + env(safe-area-inset-top)) 16px 8px;
+  background: var(--bg);
+}
+.add > .menu, .add > .rifle { margin-bottom: 14px; }
+
+/* New scan: offer to turn the card round, right under the picture of it. */
+.flip-top { width: 100%; margin-top: 10px; }
+
+/* Shot order on a card, folded away until wanted */
+.order-fold > summary { cursor: pointer; font-weight: 700; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.order-fold > summary span { font-weight: 600; font-size: 14px; }
+.order-fold[open] > summary { margin-bottom: 12px; }
