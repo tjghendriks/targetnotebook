@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Target Notebook Skirmisher check</title>
+<body style="font:13px/1.4 monospace;padding:12px;background:#fff">
+<p>Runs Skirmisher photos from dev/cards/ (kept out of the repo) through the detector and shows each box
+with the shots found (cyan sure, orange to check). Add ?f=name.jpg to run one photo.</p>
+<div id="out"></div>
+<script type="module">
+import { scanCard, probe } from '../js/detect.js';
+import { CARDS, DEFAULT_SETTINGS, scoreShot, skirmisherTally } from '../js/model.js';
+
+const query = new URLSearchParams(location.search);
+const files = query.getAll('f');
+const list = files.length ? files : ['skirm-11.jpg', 'skirm-13.jpg', 'skirm-12.jpg'];
+const card = CARDS.SKM;
+const out = document.getElementById('out');
+window.results = {};
+for (const file of list) {
+  const box = document.createElement('div');
+  out.append(box);
+  try {
+    const t0 = performance.now();
+    // ?scale=2.4 enlarges the photo first, to stand in for a full-size camera original.
+    const scale = Number(query.get('scale')) || 1;
+    let src = `cards/${file}`;
+    if (scale !== 1) {
+      const img = new Image();
+      img.src = src;
+      await img.decode();
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * scale);
+      cv.height = Math.round(img.height * scale);
+      const g = cv.getContext('2d');
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(img, 0, 0, cv.width, cv.height);
+      src = cv;
+    }
+    const r = await scanCard(src, { debug: true });
+    const ms = Math.round(performance.now() - t0);
+    if (r.type !== 'SKM') throw new Error(`read as ${r.type}`);
+    const half = card.patchMm / 2;
+    const rec = { type: 'SKM', shots: r.diagrams.flatMap((d, i) => d.shots.map((s) => ({ ...s, on: i }))) };
+    const tally = skirmisherTally(rec, DEFAULT_SETTINGS);
+    const cells = r.diagrams.map((d, i) => {
+      const marks = d.shots.map((s) => `<circle cx="${s.x}" cy="${-s.y}" r="2.8" fill="none"
+        stroke="${s.confidence === 'high' ? '#00e5ff' : '#ff9800'}" stroke-width="0.5"/>`).join('');
+      const label = d.shots.map((s) => scoreShot(s.x, s.y, card, DEFAULT_SETTINGS) + (s.confidence === 'high' ? '' : '?')).join(' ') || '–';
+      return `<div style="display:inline-block;margin:2px;text-align:center"><div style="position:relative;width:200px;height:200px">
+        <img src="${d.image}" style="position:absolute;inset:0;width:200px;height:200px">
+        <svg viewBox="${-half} ${-half} ${card.patchMm} ${card.patchMm}" style="position:absolute;inset:0;width:200px;height:200px">
+          <ellipse rx="${card.oval.width / 2}" ry="${card.oval.height / 2}" fill="none" stroke="#27e0ff" stroke-width="0.25"/>
+          <rect x="${-card.box.width / 2}" y="${-card.box.height / 2}" width="${card.box.width}" height="${card.box.height}" fill="none" stroke="#f0f" stroke-width="0.3"/>
+          ${marks}</svg></div>${i + 1}: ${label}${d.aligned ? '' : ' (unaligned)'}</div>`;
+    }).join('');
+    window.results[file] = { flipped: r.flipped, print: probe.print, total: tally.total, boxes: tally.boxes, ms,
+      shots: r.diagrams.map((d) => d.shots), candidates: r.diagrams.map((d) => d.candidates) };
+    box.innerHTML = `<h3>${file}: total ${tally.total} (${tally.hits} hits), ${rec.shots.length} shots, flipped ${r.flipped},
+      print ${JSON.stringify(probe.print)}, ${ms} ms</h3>${cells}`;
+  } catch (err) {
+    box.innerHTML = `<h3>${file}: FAILED ${err.message}</h3>`;
+    console.error(err);
+  }
+}
+window.done = true;
+</script>

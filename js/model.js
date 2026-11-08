@@ -5,6 +5,8 @@
 //
 // A saved card holds one entry per shot in `shots`, grouped by diagram:
 // shots for diagram d are at d * shotsPerDiagram ... + shotsPerDiagram - 1.
+// A Skirmisher card is different: any number of shots, each placed shot
+// carrying `on`, the box it is in (see the card's `kind`).
 
 const CROSS = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 const SIDES = [[-1, 0], [1, 0]];
@@ -107,7 +109,49 @@ export const CARDS = {
     },
     mirror: [2, 1, 0, 4, 3],
   },
+  // Eight oval figures, one in each box of a 4 by 2 grid. Any number of shots;
+  // each hit on an oval scores one, under the limits in skirmisherTally.
+  // Ovals per NSRA appendix A: 1.05 in high, 0.7 in wide. Box and card sizes
+  // were measured off photos of real cards against the ovals.
+  SKM: {
+    id: 'SKM',
+    label: 'Skirmisher',
+    name: 'NSRA Skirmisher',
+    kind: 'skirmisher',
+    width: 344,
+    height: 236,
+    trim: null,
+    frame: { width: 312, height: 206 },
+    box: { width: 78, height: 103 },
+    oval: { width: 17.78, height: 26.67 },
+    // Height of the oval, for anything that wants one size for the aiming mark.
+    aimingMarkDia: 26.67,
+    rings: [],
+    numerals: [],
+    gauging: 'inward',
+    // Not fixed: shots are counted per box as they fall.
+    shotsPerDiagram: null,
+    rows: [4, 4],
+    diagrams: [-51.5, 51.5].flatMap((y) => [-117, -39, 39, 117].map((x) => ({ x, y }))),
+    symmetric: true,
+    // Which way up: the title is printed along the top of the top-right box
+    // and the copyright line along the bottom of the right half. On an
+    // upside-down card both turn up where these strips are empty.
+    print: {
+      upright: [[90, 145, -100, -92], [10, 60, 92, 100]],
+      inverted: [[-145, -90, 92, 100], [-60, -10, -100, -92]],
+    },
+    // Printed matter inside the boxes ([x0, x1, y0, y1], card mm, y down): the
+    // logo, title, "25 YARDS" and copyright line. Not searched for holes.
+    printed: [[-156, -136, -102, -84], [84, 154, -102, -93], [-156, -128, 91, 102], [-4, 156, 91, 102]],
+    // Square photo kept per box, big enough to show all of it.
+    patchMm: 106,
+    // No firing order: shots go on any oval in any order.
+    orders: null,
+  },
 };
+
+export const isSkirmisher = (card) => card?.kind === 'skirmisher';
 
 export const DEFAULT_TYPE = '2510BM';
 // Cards saved before other card types existed carry no type.
@@ -122,6 +166,8 @@ export const isOrder = (a, n) =>
 
 // spec: { method: <key of card.orders> | 'custom', mirror, custom }
 export function resolveOrder(card, spec) {
+  // A card with no firing order (Skirmisher) is taken in reading order.
+  if (!card.orders) return card.diagrams.map((_, i) => i);
   if (spec?.method === 'custom' && isOrder(spec.custom, card.diagrams.length)) return [...spec.custom];
   const base = (card.orders[spec?.method] ?? card.orders.clockwise).order;
   return spec?.mirror ? base.map((p) => card.mirror[p]) : [...base];
@@ -149,7 +195,36 @@ export const cardOrder = (rec, settings) => {
 
 const EPS = 1e-6;
 
+// Signed distance (mm) from a point to the edge of an ellipse with semi-axes
+// a (across) and b (up) centred on the origin: positive outside, negative inside.
+export function ellipseDistance(px, py, a, b) {
+  const x = Math.abs(px);
+  const y = Math.abs(py);
+  // Nearest point on the edge, found by iterating on its direction.
+  let tx = Math.SQRT1_2;
+  let ty = Math.SQRT1_2;
+  for (let i = 0; i < 6; i++) {
+    const ex = ((a * a - b * b) * tx ** 3) / a;
+    const ey = ((b * b - a * a) * ty ** 3) / b;
+    const r = Math.hypot(a * tx - ex, b * ty - ey);
+    const q = Math.hypot(x - ex, y - ey) || 1e-9;
+    tx = Math.min(1, Math.max(0, ((x - ex) * r) / q / a + ex / a));
+    ty = Math.min(1, Math.max(0, ((y - ey) * r) / q / b + ey / b));
+    const t = Math.hypot(tx, ty);
+    tx /= t;
+    ty /= t;
+  }
+  const d = Math.hypot(x - a * tx, y - b * ty);
+  return (x / a) ** 2 + (y / b) ** 2 < 1 ? -d : d;
+}
+
+// Skirmisher: how far a shot's gauge is from touching the oval (mm); 0 or
+// less is a hit, since inward gauging needs only a touch.
+const ovalGap = (x, y, card, settings) =>
+  ellipseDistance(x, y, card.oval.width / 2, card.oval.height / 2) - settings.gaugeDia / 2;
+
 export function scoreShot(x, y, card, settings = DEFAULT_SETTINGS) {
+  if (isSkirmisher(card)) return ovalGap(x, y, card, settings) <= EPS ? 1 : 0;
   const d = Math.hypot(x, y);
   const g = settings.gaugeDia / 2;
   const reach = card.gauging === 'inward' ? d - g : d + g;
@@ -162,7 +237,7 @@ export function scoreShot(x, y, card, settings = DEFAULT_SETTINGS) {
 }
 
 // Every value a shot on this card can score, highest first, ending with 0.
-export const shotValues = (card) => [...card.rings.map((r) => r.score), ...(card.fringe ? [card.fringe.score] : []), 0];
+export const shotValues = (card) => isSkirmisher(card) ? [1, 0] : [...card.rings.map((r) => r.score), ...(card.fringe ? [card.fringe.score] : []), 0];
 
 // Each entry in a card's `shots` is one of: a placed shot { x, y, ... }, a
 // confirmed miss { miss: true } (no hole on the diagram, scores 0), or null
@@ -170,6 +245,7 @@ export const shotValues = (card) => [...card.rings.map((r) => r.score), ...(card
 // How far (mm) a shot's centre is from the nearest point at which its score
 // would change. Below a few tenths of a millimetre a photo cannot settle it.
 export function scoreMargin(x, y, card, settings = DEFAULT_SETTINGS) {
+  if (isSkirmisher(card)) return Math.abs(ovalGap(x, y, card, settings));
   const d = Math.hypot(x, y);
   const g = settings.gaugeDia / 2;
   const reach = card.gauging === 'inward' ? d - g : d + g;
@@ -192,7 +268,8 @@ export const unaccounted = (rec) => rec.shots.filter((s) => !isShot(s) && !isMis
 export function shotOn(rec, i) {
   const card = cardType(rec);
   const on = rec.shots[i]?.on;
-  return Number.isInteger(on) && on >= 0 && on < card.diagrams.length ? on : Math.floor(i / card.shotsPerDiagram);
+  if (Number.isInteger(on) && on >= 0 && on < card.diagrams.length) return on;
+  return isSkirmisher(card) ? -1 : Math.floor(i / card.shotsPerDiagram);
 }
 export const slotsOn = (rec, d) => rec.shots.map((_, i) => i).filter((i) => shotOn(rec, i) === d);
 
@@ -200,12 +277,37 @@ export const slotsOn = (rec, d) => rec.shots.map((_, i) => i).filter((i) => shot
 // but each one over the number a diagram should take costs a point.
 export function crossFirePenalty(rec) {
   const card = cardType(rec);
+  // Skirmisher (rule 5.3.4.2): cross-shots are recorded as misses, with no penalty.
+  if (isSkirmisher(card)) return 0;
   return card.diagrams.reduce((t, _, d) =>
     t + Math.max(0, slotsOn(rec, d).filter((i) => isShot(rec.shots[i])).length - card.shotsPerDiagram), 0);
 }
 
+// Skirmisher scoring, rule 5.3.4.2. Each hit on an oval scores one, but no
+// oval is credited with more hits than one more than the fewest attempts
+// made in any box, and never fewer than two: so two hits per oval until every
+// box has had two attempts, then three until every box has had three, and so
+// on. An attempt is any shot in the box, hit or not. A card cannot show the
+// order shots were fired, so the limits are applied to the finished card.
+export function skirmisherTally(rec, settings) {
+  const card = cardType(rec);
+  const boxes = card.diagrams.map(() => ({ attempts: 0, hits: 0 }));
+  rec.shots.forEach((s, i) => {
+    const box = boxes[shotOn(rec, i)];
+    if (!isShot(s) || !box) return;
+    box.attempts++;
+    box.hits += scoreShot(s.x, s.y, card, settings);
+  });
+  const cap = Math.max(2, Math.min(...boxes.map((b) => b.attempts)) + 1);
+  for (const b of boxes) b.credited = Math.min(b.hits, cap);
+  const hits = boxes.reduce((t, b) => t + b.hits, 0);
+  const total = boxes.reduce((t, b) => t + b.credited, 0);
+  return { boxes, cap, hits, total, disallowed: hits - total };
+}
+
 export function cardTotal(rec, settings) {
   const card = cardType(rec);
+  if (isSkirmisher(card)) return skirmisherTally(rec, settings).total;
   return rec.shots.reduce((t, s) => t + shotValue(s, card, settings), 0) - crossFirePenalty(rec);
 }
 

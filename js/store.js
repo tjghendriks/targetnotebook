@@ -1,6 +1,6 @@
 // On-device storage (IndexedDB): saved cards and settings.
 
-import { DEFAULT_SETTINGS } from './model.js?v=2026.11.08-1';
+import { DEFAULT_SETTINGS } from './model.js?v=2026.11.08-2';
 
 // Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';
@@ -98,7 +98,8 @@ export async function importData(data) {
   }
   let count = 0;
   for (const card of data.cards) {
-    if (!card?.id || !Array.isArray(card.shots) || card.shots.length !== 10) continue;
+    // Skirmisher cards hold any number of shots; every other card holds ten.
+    if (!card?.id || !Array.isArray(card.shots) || (card.type !== 'SKM' && card.shots.length !== 10)) continue;
     const existing = await getCard(card.id);
     await putCard({ ...card, images: card.images ?? existing?.images ?? null });
     count++;

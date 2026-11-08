@@ -2,9 +2,10 @@
 // Pipeline: find the ten black aiming marks, fit a homography to the known
 // card layout, rectify each diagram, refine its centre and scale from the edge
 // of the aiming mark, then look for the one region that breaks the diagram's
-// radial symmetry (the shot hole).
+// radial symmetry (the shot hole). A Skirmisher card's oval marks are handled
+// as circles stretched to fit, and its whole box is searched for any number of holes.
 
-import { CARDS } from './model.js?v=2026.11.08-1';
+import { CARDS, isSkirmisher, ellipseDistance } from './model.js?v=2026.11.08-2';
 
 export class ScanError extends Error {}
 
@@ -106,7 +107,7 @@ function darkComponents(data, w, h, thr) {
     let sp = 0;
     stack[sp++] = start;
     seen[start] = 1;
-    const c = { area: 0, sx: 0, sy: 0, minx: w, maxx: 0, miny: h, maxy: 0 };
+    const c = { area: 0, sx: 0, sy: 0, sxx: 0, syy: 0, sxy: 0, minx: w, maxx: 0, miny: h, maxy: 0 };
     while (sp) {
       const p = stack[--sp];
       const x = p % w;
@@ -114,6 +115,9 @@ function darkComponents(data, w, h, thr) {
       c.area++;
       c.sx += x;
       c.sy += y;
+      c.sxx += x * x;
+      c.syy += y * y;
+      c.sxy += x * y;
       if (x < c.minx) c.minx = x;
       if (x > c.maxx) c.maxx = x;
       if (y < c.miny) c.miny = y;
@@ -148,8 +152,21 @@ function minFilter3(data, w, h) {
   return out;
 }
 
-// The n round dark blobs most alike in size.
-export function findMarks(img, n) {
+// How round a blob is: minor over major axis of its second moments (1 = round).
+function roundness(c) {
+  const mx = c.sx / c.area;
+  const my = c.sy / c.area;
+  const xx = c.sxx / c.area - mx * mx;
+  const yy = c.syy / c.area - my * my;
+  const xy = c.sxy / c.area - mx * my;
+  const mean = (xx + yy) / 2;
+  const diff = Math.hypot((xx - yy) / 2, xy);
+  return Math.sqrt(Math.max(0, mean - diff) / (mean + diff));
+}
+
+// The n dark blobs most alike in size: round ones, or with `oval` set,
+// ones about half as wide again as they are across (a Skirmisher's figures).
+export function findMarks(img, n, oval = false) {
   const f = Math.max(1, Math.ceil(Math.max(img.w, img.h) / 900));
   const small = downscaleLuma(img, f);
   const long = Math.max(small.w, small.h);
@@ -163,6 +180,11 @@ export function findMarks(img, n) {
       const bw = c.maxx - c.minx + 1;
       const bh = c.maxy - c.miny + 1;
       const fill = c.area / (bw * bh);
+      if (oval) {
+        const r = roundness(c);
+        return bw >= 0.02 * long && bw <= 0.2 * long && bh >= 0.02 * long && bh <= 0.2 * long &&
+          fill > 0.55 && fill < 0.9 && r > 0.45 && r < 0.85;
+      }
       return (
         bw >= 0.03 * long && bw <= 0.3 * long && bh >= 0.03 * long && bh <= 0.3 * long &&
         bw / bh > 0.6 && bw / bh < 1.67 && fill > 0.55 && fill < 0.9
@@ -603,16 +625,18 @@ function fitEllipse(pts, markR) {
 
 // ---------- shot detection ----------
 
-function radialMedian(a, n, ppm, bins) {
+// Median of each circle round the centre, or of each ellipse with semi-axes
+// in the ratio ex : ey (for an oval aiming mark).
+function radialMedian(a, n, ppm, bins, ex = 1, ey = 1) {
   const c = (n - 1) / 2;
   const out = new Float32Array(bins);
   out[0] = sample(a, n, c, c);
   for (let k = 1; k < bins; k++) {
-    const m = Math.max(16, Math.ceil(2 * Math.PI * k));
+    const m = Math.max(16, Math.ceil(2 * Math.PI * k * Math.max(ex, ey)));
     const buf = new Float32Array(m);
     for (let i = 0; i < m; i++) {
       const t = (2 * Math.PI * i) / m;
-      buf[i] = sample(a, n, c + k * Math.cos(t), c + k * Math.sin(t));
+      buf[i] = sample(a, n, c + k * ex * Math.cos(t), c + k * ey * Math.sin(t));
     }
     buf.sort();
     out[k] = buf[m >> 1];
@@ -643,25 +667,30 @@ function boxMean(I, n, x, y, half) {
 
 // Grey-scale erosion or dilation over a square window: each pixel becomes the
 // smallest (or, with `grow`, the largest) value within `rad` px.
+// Done one row (then one column) at a time with a running window of
+// candidates, so the cost does not grow with the radius.
 function morph(a, n, rad, grow) {
-  const pick = grow ? Math.max : Math.min;
-  const start = grow ? -Infinity : Infinity;
   const tmp = new Float32Array(n * n);
   const out = new Float32Array(n * n);
-  for (let y = 0; y < n; y++) {
+  const idx = new Int32Array(n);
+  // Window min (or max) along one line: values src[base + k * step], k = 0..n-1.
+  const line = (src, dst, base, step) => {
+    let head = 0;
+    let tail = 0;
+    let next = 0;
     for (let x = 0; x < n; x++) {
-      let m = start;
-      for (let k = Math.max(0, x - rad); k <= Math.min(n - 1, x + rad); k++) m = pick(m, a[y * n + k]);
-      tmp[y * n + x] = m;
+      const hi = Math.min(n - 1, x + rad);
+      for (; next <= hi; next++) {
+        const v = src[base + next * step];
+        while (tail > head && (grow ? src[base + idx[tail - 1] * step] <= v : src[base + idx[tail - 1] * step] >= v)) tail--;
+        idx[tail++] = next;
+      }
+      while (idx[head] < x - rad) head++;
+      dst[base + x * step] = src[base + idx[head] * step];
     }
-  }
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      let m = start;
-      for (let k = Math.max(0, y - rad); k <= Math.min(n - 1, y + rad); k++) m = pick(m, tmp[k * n + x]);
-      out[y * n + x] = m;
-    }
-  }
+  };
+  for (let y = 0; y < n; y++) line(a, tmp, y * n, 1);
+  for (let x = 0; x < n; x++) line(tmp, out, x, n);
   return out;
 }
 const erode = (a, n, rad) => morph(a, n, rad, false);
@@ -674,8 +703,11 @@ export function residualMap(patch, card) {
   const RMAX = card.searchR;
   const markR = card.aimingMarkDia / 2;
   const bins = Math.floor(RMAX * ppm) + 4;
-  const El = radialMedian(luma, n, ppm, bins);
-  const Eb = radialMedian(blue, n, ppm, bins);
+  // An oval mark is treated as a circle stretched by (ex, ey): distances from
+  // the centre are measured in that stretched space.
+  const [ex, ey] = card.ellipse ?? [1, 1];
+  const El = radialMedian(luma, n, ppm, bins, ex, ey);
+  const Eb = radialMedian(blue, n, ppm, bins, ex, ey);
   // A central shot covers most of the innermost circles, so the median there
   // would be the hole itself. Inside the 10 ring the card is plain black.
   const core = Math.round(Math.min(4.5, card.rings[0].dia / 2 - 0.6) * ppm);
@@ -697,6 +729,26 @@ export function residualMap(patch, card) {
   };
   const Tl = tol(El);
   const Tb = tol(Eb);
+  // A Skirmisher box is mostly bare paper, too big for one brightness per
+  // distance to fit the light falling across it. Well away from the oval each
+  // pixel is compared with the paper around it instead.
+  const far = card.searchBox ? (markR + 7) * ppm : Infinity;
+  let Ml = null;
+  let Mb = null;
+  if (card.searchBox) {
+    const rad = Math.round(5 * ppm);
+    const Il = integral(luma, n);
+    const Ib = integral(blue, n);
+    Ml = new Float32Array(n * n);
+    Mb = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        if (Math.hypot((i - c) / ex, (j - c) / ey) <= far) continue;
+        Ml[j * n + i] = boxMean(Il, n, i, j, rad);
+        Mb[j * n + i] = boxMean(Ib, n, i, j, rad);
+      }
+    }
+  }
   const Rl = new Float32Array(n * n);
   const Rb = new Float32Array(n * n);
   const Xl = new Float32Array(n * n); // expected value at each pixel
@@ -704,7 +756,7 @@ export function residualMap(patch, card) {
   const bin = new Int16Array(n * n).fill(-1);
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
-      const r = Math.hypot(i - c, j - c);
+      const r = Math.hypot((i - c) / ex, (j - c) / ey);
       if (r > RMAX * ppm) continue;
       const k0 = Math.floor(r);
       const f = r - k0;
@@ -727,7 +779,7 @@ export function residualMap(patch, card) {
       for (let j = 0; j < n; j += 3) {
         for (let i = 0; i < n; i += 3) {
           const o = j * n + i;
-          if (bin[o] < 0) continue;
+          if (bin[o] < 0 || bin[o] > far) continue;
           const x = i - c;
           const y = j - c;
           const e = X[o];
@@ -756,6 +808,13 @@ export function residualMap(patch, card) {
       const o = j * n + i;
       const k = bin[o];
       if (k < 0) continue;
+      if (k > far) {
+        const sl = luma[o] - Ml[o];
+        const sb = blue[o] - Mb[o];
+        signed[o] = (Math.abs(sl) >= Math.abs(sb) ? sl : sb) / contrast;
+        D[o] = Math.max(Math.abs(sl), Math.abs(sb)) / contrast;
+        continue;
+      }
       const x = i - c;
       const y = j - c;
       const sl = Rl[o] - Xl[o] * (Pl[0] + Pl[1] * x + Pl[2] * y);
@@ -896,17 +955,30 @@ function findHoles(patch, card, want) {
 
   const box = Math.max(1, Math.round(1.2 * q));
   const reach = (card.searchR - 2) * ppm;
+  const [ex, ey] = card.ellipse ?? [1, 1];
+  // Where to look: a circle round the mark, or a Skirmisher's whole box.
+  const within = card.searchBox
+    ? (x, y) => Math.abs(x - c) <= card.searchBox.hx * ppm && Math.abs(y - c) <= card.searchBox.hy * ppm &&
+      !(card.printed ?? []).some(([x0, x1, y0, y1]) => x >= c + x0 * ppm && x <= c + x1 * ppm && y >= c + y0 * ppm && y <= c + y1 * ppm)
+    : (x, y) => Math.hypot(x - c, y - c) <= reach;
+  // The response everywhere it is looked for (0 elsewhere), worked out once.
+  const response = new Float32Array(h * h);
+  for (let j = box; j < h - box; j++) {
+    for (let i = box; i < h - box; i++) {
+      if (within(2 * i + 0.5, 2 * j + 0.5)) response[j * h + i] = boxMean(Ig, h, i, j, box);
+    }
+  }
   // Strongest response, keeping clear of the `avoid` circles ({x, y, r} in patch px).
   const peak = (avoid) => {
     let best = { v: 0, x: 0, y: 0 };
     for (let j = box; j < h - box; j++) {
       for (let i = box; i < h - box; i++) {
+        const v = response[j * h + i];
+        if (!(v > best.v)) continue;
         const x = 2 * i + 0.5;
         const y = 2 * j + 0.5;
-        if (Math.hypot(x - c, y - c) > reach) continue;
         if (avoid.some((a) => Math.hypot(x - a.x, y - a.y) < a.r)) continue;
-        const v = boxMean(Ig, h, i, j, box);
-        if (v > best.v) best = { v, x, y };
+        best = { v, x, y };
       }
     }
     return best;
@@ -963,6 +1035,10 @@ function findHoles(patch, card, want) {
     let outline = spot.v > 0.04 ? blobIn(Ie, n, ppm, spot.x, spot.y, 0.4 * spot.v, thin / ppm) : null;
     if (outline && outline.area < 2) outline = null;
     const shape = outline ?? disturbed;
+    // Skirmisher: two shots keyholed into one opening show as two lobes, one
+    // often lighter than the other, so the outline above may take in only one.
+    // Traced more loosely it takes in both.
+    const loose = card.searchBox && spot.v > 0.04 ? blobIn(Ie, n, ppm, spot.x, spot.y, 0.3 * spot.v, thin / ppm) : null;
     const centre = settle(shape.x, shape.y);
     return {
       v: p.v,
@@ -983,6 +1059,8 @@ function findHoles(patch, card, want) {
       round: shape.width > 1.8 && shape.width < 7.5,
       holeLike: !!outline && disturbed.width > 2.5 && disturbed.width < 8 && disturbed.length < 14,
       spread: shape.length,
+      // Size of the whole disturbed patch, which takes in both halves of a keyhole.
+      loose,
     };
   };
 
@@ -991,7 +1069,7 @@ function findHoles(patch, card, want) {
   const holes = [];
   const avoid = [];
   probe.candidates = [];
-  for (let k = 0; k < 10 && holes.filter((d) => d.inside).length < want && holes.length < want + 2; k++) {
+  for (let k = 0; k < Math.max(10, want + 6) && holes.filter((d) => d.inside).length < want && holes.length < want + 2; k++) {
     const p = peak(avoid);
     if (p.v < 0.05) break;
     const d = describe(p);
@@ -1001,11 +1079,14 @@ function findHoles(patch, card, want) {
       continue;
     }
     avoid.push({ x: d.x, y: d.y, r: (d.spread / 2 + 2.2) * ppm });
-    d.inside = Math.hypot(d.x - c, d.y - c) <= (markR + 1) * ppm;
+    // If the outline settled well away from the peak, keep clear of the peak too, or it is found again.
+    if (Math.hypot(d.x - p.x, d.y - p.y) > 3 * ppm) avoid.push({ x: p.x, y: p.y, r: 3 * ppm });
+    d.inside = Math.hypot((d.x - c) / ex, (d.y - c) / ey) <= (markR + 1) * ppm;
     probe.candidates.push({ x: (d.x - c) / ppm, y: -(d.y - c) / ppm, v: p.v, inside: d.inside, holeLike: d.holeLike, spread: d.spread, gap: d.gap, agree: d.agree, round: d.round, off: d.off, width: d.width });
     // Anything much bigger than a hole (a stretch of misprinted ring, a
     // shadow edge) is not one, wherever it is.
-    if ((d.inside || d.holeLike) && d.spread <= 14) holes.push(d);
+    // A Skirmisher box keeps round marks too, for detectMany to judge by where they are.
+    if ((d.inside || d.holeLike || (card.searchBox && d.agree && d.round)) && d.spread <= 14) holes.push(d);
   }
   holes.sort((p, q) => q.v - p.v);
   const toShot = (x, y, sure) => ({ x: (x - c) / ppm, y: -(y - c) / ppm, confidence: sure ? 'high' : 'low' });
@@ -1069,6 +1150,45 @@ function detectPair(patch, card) {
   return [toShot(a.x, a.y, strong(a)), null];
 }
 
+// Skirmisher: any number of shots in the box, hits and misses alike. Each
+// hole found is a shot; an elongated one is two that overlap.
+function detectMany(patch, card) {
+  const { holes, toShot, ppm } = findHoles(patch, card, 8);
+  const shots = [];
+  for (const h of holes) {
+    if (h.v < 0.08) continue;
+    // Off the oval there is handwriting and scorers' marks, mostly well out
+    // towards the edges of the box. Near the oval a round mark, or a hole-shaped
+    // one, counts; further out only a hole-shaped opening whose two views agree
+    // on where it is.
+    const at = toShot(h.x, h.y, false);
+    const fromOval = ellipseDistance(at.x, at.y, card.oval.width / 2, card.oval.height / 2);
+    const near = fromOval < 15 && ((h.agree && h.round) || (h.holeLike && h.off < 2));
+    if (!h.inside && !near && !(h.holeLike && h.agree)) continue;
+    // Only hit or miss matters here, so a hole well inside the black is sure
+    // enough even when its outline is not crisp: nothing else makes a mark there.
+    const deep = fromOval < -1;
+    const sure = (h.agree && h.round && h.v >= 0.2) || (deep && h.v >= 0.12);
+    // A hole torn at the edge of the black can look a little drawn out, so
+    // only a clearly long one is taken as two overlapping shots.
+    // A keyhole: an opening longer than one shot makes, and well drawn out.
+    // On real cards single holes traced this way were at most 5.7 mm long and
+    // 2.1 mm longer than wide; a keyholed pair, 6.5 and 3.3.
+    const k = h.loose;
+    if (k && h.v >= 0.15 && k.length >= 6 && k.length - k.width >= 2.8) {
+      const half = ((k.length - k.width) * ppm) / 2;
+      shots.push(toShot(k.x - k.ax * half, k.y - k.ay * half, false), toShot(k.x + k.ax * half, k.y + k.ay * half, false));
+    } else if (h.gap >= 2.5 && h.agree) {
+      const half = (h.gap * ppm) / 2;
+      shots.push(toShot(h.mx - h.ax * half, h.my - h.ay * half, sure), toShot(h.mx + h.ax * half, h.my + h.ay * half, sure));
+    } else {
+      shots.push(toShot(h.x, h.y, sure && (h.gap < 1 || deep)));
+    }
+  }
+  // The same hole reached twice (its rim, or a ragged edge) is one shot.
+  return shots.filter((s, i) => !shots.slice(0, i).some((t) => Math.hypot(s.x - t.x, s.y - t.y) < 2.5));
+}
+
 // ---------- top level ----------
 
 // Amount of fine print in the strip beyond the outer column of diagrams.
@@ -1086,6 +1206,57 @@ function printEnergy(img, H, side) {
     }
   }
   return sum / count;
+}
+
+// Amount of fine print in a rectangle of the card ([x0, x1, y0, y1], card mm).
+function regionEnergy(img, H, [x0, x1, y0, y1]) {
+  const ppm = 4;
+  const size = Math.max(x1 - x0, y1 - y0) + 2;
+  const p = extractPatch(img, H, (x0 + x1) / 2, (y0 + y1) / 2, size, ppm);
+  const { n, luma } = p;
+  const c = (n - 1) / 2;
+  let sum = 0;
+  let count = 0;
+  for (let j = Math.ceil(c - ((y1 - y0) / 2) * ppm); j < c + ((y1 - y0) / 2) * ppm; j++) {
+    for (let i = Math.ceil(c - ((x1 - x0) / 2) * ppm); i < c + ((x1 - x0) / 2) * ppm; i++) {
+      if (i < 1 || j < 1 || i >= n - 1 || j >= n - 1) continue;
+      sum += Math.abs(luma[j * n + i + 1] - luma[j * n + i - 1]) + Math.abs(luma[(j + 1) * n + i] - luma[(j - 1) * n + i]);
+      count++;
+    }
+  }
+  return count ? sum / count : 0;
+}
+
+// An oval mark is fitted as a circle of this radius (mm), in a patch stretched to make it round.
+const OVAL_R = 11;
+
+// How the patch round a mark must be stretched to show an oval mark as a circle of OVAL_R.
+const roundingT = (card) => (card.oval ? [card.oval.width / 2 / OVAL_R, 0, 0, card.oval.height / 2 / OVAL_R] : [1, 0, 0, 1]);
+const mul2 = ([a, b, c, d], [p, q, r, t]) => [a * p + b * r, a * q + b * t, c * p + d * r, c * q + d * t];
+const inv2 = ([a, b, c, d]) => {
+  const det = a * d - b * c;
+  return [d / det, -b / det, -c / det, a / det];
+};
+
+// Finds the aiming mark of diagram d: its centre as an offset from where the
+// layout puts it, and the 2x2 stretch T taking true card mm round it onto the
+// photo's (both in card mm). Null if the edge could not be traced.
+function measureMark(img, H, d, card, size = 64) {
+  const T0 = roundingT(card);
+  const markR = card.oval ? OVAL_R : card.aimingMarkDia / 2;
+  let fit = null;
+  let ox = 0;
+  let oy = 0;
+  let P = T0; // patch units to card mm
+  for (let pass = 0; pass < 2; pass++) {
+    const f = fitMark(extractPatch(img, H, d.x + ox, d.y + oy, card.oval ? 50 : size, 6, P), markR);
+    if (!f) break;
+    ox += P[0] * f.ox + P[1] * f.oy;
+    oy += P[2] * f.ox + P[3] * f.oy;
+    P = mul2(P, f.T);
+    fit = { ox, oy, T: mul2(P, inv2(T0)) };
+  }
+  return fit;
 }
 
 function patchToDataUrl(patch, outPx) {
@@ -1106,7 +1277,7 @@ async function scanAs(img, card, onProgress, debug) {
   const layout = card.diagrams;
   const count = layout.length;
   const markR = card.aimingMarkDia / 2;
-  const found = findMarks(img, count);
+  const found = findMarks(img, count, !!card.oval);
   const { ordered: marks, flipped: inverted } = assignMarks(found, card);
   const meanR = marks.reduce((s, m) => s + m.r, 0) / count;
   if (layoutError(layout, marks) > 0.4 * meanR) {
@@ -1117,7 +1288,7 @@ async function scanAs(img, card, onProgress, debug) {
     // Tighten the homography using the fitted centre of each aiming mark.
     for (let pass = 0; pass < 2; pass++) {
       const pts = layout.map((d, i) => {
-        const fit = fitMark(extractPatch(img, H, d.x, d.y, 64, 6), markR);
+        const fit = card.oval ? measureMark(img, H, d, card) : fitMark(extractPatch(img, H, d.x, d.y, 64, 6), markR);
         return fit ? applyH(H, d.x + fit.ox, d.y + fit.oy) : ordered[i];
       });
       H = homography(layout, pts);
@@ -1128,7 +1299,13 @@ async function scanAs(img, card, onProgress, debug) {
   await tick();
   let H = register(marks);
   let flipped = inverted;
-  if (card.symmetric) {
+  if (card.print) {
+    // Print where it would be on an upside-down card, and not where it should be.
+    const energy = (rects) => rects.reduce((t, r) => t + regionEnergy(img, H, r), 0);
+    flipped = energy(card.print.inverted) > 1.3 * energy(card.print.upright);
+    probe.print = { upright: energy(card.print.upright), inverted: energy(card.print.inverted) };
+    if (flipped) H = register([...marks].reverse());
+  } else if (card.symmetric) {
     // The pattern text is printed at the right-hand end of the card, so more
     // print on the left means it is inverted.
     flipped = printEnergy(img, H, -1) > 1.3 * printEnergy(img, H, 1);
@@ -1142,6 +1319,21 @@ async function scanAs(img, card, onProgress, debug) {
     await tick();
     // Measure the mark, then measure again on the corrected patch: the second
     // pass picks up what the first could not see through the distortion.
+    if (isSkirmisher(card)) {
+      const fit = measureMark(img, H, d, card);
+      const patch = extractPatch(
+        img, H, d.x + (fit ? fit.ox : 0), d.y + (fit ? fit.oy : 0), card.patchMm, PATCH_PPM, fit?.T, true
+      );
+      const shots = detectMany(patch, skirmisherSearch(card, { x: d.x + (fit ? fit.ox : 0), y: d.y + (fit ? fit.oy : 0) }));
+      diagrams.push({
+        image: patchToDataUrl(patch, 640),
+        aligned: !!fit,
+        shots: shots.map((s) => ({ x: round2(s.x), y: round2(s.y), source: 'auto', confidence: s.confidence })),
+        extras: [],
+        ...(debug ? { patch, fit, map: probe.map, candidates: probe.candidates } : {}),
+      });
+      continue;
+    }
     let fit = fitMark(extractPatch(img, H, d.x, d.y, 64, 6), markR);
     if (fit) {
       const again = fitMark(extractPatch(img, H, d.x + fit.ox, d.y + fit.oy, 64, 6, fit.T), markR);
@@ -1180,6 +1372,30 @@ async function scanAs(img, card, onProgress, debug) {
   return { type: card.id, diagrams, flipped, pixelsPerMm: meanR / markR, size: { w: img.w, h: img.h } };
 }
 
+// What the hole search on a Skirmisher box works with: the oval as a circle
+// of OVAL_R stretched by `ellipse`, and the whole box (less its ruled edges)
+// to look in. `searchR` (in the stretched space) reaches the box's corners.
+function skirmisherSearch(card, d) {
+  const ex = card.oval.width / 2 / OVAL_R;
+  const ey = card.oval.height / 2 / OVAL_R;
+  const hx = card.box.width / 2 - 1.5;
+  const hy = card.box.height / 2 - 1.5;
+  return {
+    ...card,
+    aimingMarkDia: 2 * OVAL_R,
+    rings: [{ dia: 2 * OVAL_R }],
+    ellipse: [ex, ey],
+    searchBox: { hx, hy },
+    searchR: Math.hypot(hx / ex, hy / ey) + 3,
+    // The card's own print in this box, as patch mm (y down), where a hole is not looked for.
+    printed: (card.printed ?? []).map(([x0, x1, y0, y1]) => [x0 - d.x, x1 - d.x, y0 - d.y, y1 - d.y]),
+  };
+}
+
+// Tried in this order: a Skirmisher's eight ovals are checked before the
+// 5-bull card, so five of them are never mistaken for its five round marks.
+const SCAN_ORDER = ['2510BM', 'SKM', '2505CS'];
+
 // Works out which card it is from the number and layout of the aiming marks.
 export async function scanCard(src, { onProgress = () => {}, debug = false } = {}) {
   onProgress('Reading photo');
@@ -1187,7 +1403,8 @@ export async function scanCard(src, { onProgress = () => {}, debug = false } = {
   const img = await decodeImage(src);
   onProgress('Finding the aiming marks');
   await tick();
-  for (const card of Object.values(CARDS)) {
+  const cards = [...SCAN_ORDER.map((id) => CARDS[id]), ...Object.values(CARDS).filter((c) => !SCAN_ORDER.includes(c.id))];
+  for (const card of cards) {
     try {
       return await scanAs(img, card, onProgress, debug);
     } catch (err) {
