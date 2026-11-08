@@ -1,15 +1,15 @@
 import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
-  isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.11.08-1';
-import * as store from './store.js?v=2026.11.08-1';
-import { scanCard, ScanError } from './detect.js?v=2026.11.08-1';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.11.08-1';
-import { CHANGES } from './changes.js?v=2026.11.08-1';
+  isOrder, resolveOrder, cardOrder, defaultOrderSpec, isSkirmisher, skirmisherTally, ellipseDistance,
+} from './model.js?v=2026.11.08-2';
+import * as store from './store.js?v=2026.11.08-2';
+import { scanCard, ScanError } from './detect.js?v=2026.11.08-2';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg, diagramMarkup as diagramMarkupFor } from './render.js?v=2026.11.08-2';
+import { CHANGES } from './changes.js?v=2026.11.08-2';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.11.08-1';
+const VERSION = '2026.11.08-2';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -29,20 +29,24 @@ const longDate = (iso) => {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 };
 // Competitions usually shot at that time of year, offered as suggestions for
-// a card's competition name. Months are 1 to 12, inclusive.
+// a card's competition name, on the card types they are shot on. Months are
+// 1 to 12, inclusive.
 const SEASONAL = [
-  { name: 'BSSRA Autumn League', from: 9, to: 11 },
-  { name: 'Prince William of Wales', from: 11, to: 12 },
-  { name: 'NSRA/Eley Round 1', from: 1, to: 2 },
-  { name: 'BSSRA Spring League', from: 1, to: 3 },
-  { name: 'NSRA/Eley Round 2', from: 3, to: 4 },
-  { name: 'BSSRA Summer League', from: 4, to: 6 },
+  { name: 'BSSRA Autumn League', from: 9, to: 11, cards: ['2510BM'] },
+  { name: 'Prince William of Wales', from: 11, to: 12, cards: ['2510BM'] },
+  { name: 'CUSBC Match', from: 11, to: 11, cards: ['2510BM', 'SKM'] },
+  { name: 'NSRA/Eley Round 1', from: 1, to: 2, cards: ['2510BM'] },
+  { name: "St John's Leatherhead Match", from: 1, to: 1, cards: ['2510BM', 'SKM'] },
+  { name: 'OURC Match', from: 1, to: 2, cards: ['2510BM'] },
+  { name: 'BSSRA Spring League', from: 1, to: 3, cards: ['2510BM'] },
+  { name: 'NSRA/Eley Round 2', from: 3, to: 4, cards: ['2510BM'] },
+  { name: 'BSSRA Summer League', from: 4, to: 6, cards: ['2510BM'] },
 ];
 // Shown as buttons under the field rather than through the browser's own
 // suggestion list, which iPhones replace with their own AutoFill.
-function competitionIdeas(date) {
+function competitionIdeas(date, card) {
   const month = Number(String(date).slice(5, 7)) || new Date().getMonth() + 1;
-  const names = [...SEASONAL.filter((c) => month >= c.from && month <= c.to).map((c) => c.name), 'Practice'];
+  const names = [...SEASONAL.filter((c) => month >= c.from && month <= c.to && c.cards.includes(card.id)).map((c) => c.name), 'Practice'];
   return names.map((n) => `<button type="button" class="idea" data-idea="${esc(n)}">${esc(n)}</button>`).join('');
 }
 
@@ -98,7 +102,9 @@ function showChanges() {
   el.innerHTML = `<div class="dialog-box news-box" role="dialog" aria-modal="true" aria-labelledby="news-title">
     <h2 id="news-title">What's new</h2>
     <div class="news-list">${CHANGES.map((c) => `
-      <section><h3>${esc(c.date)}</h3><ul>${c.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></section>`).join('')}
+      <section><h3>${esc(c.date)}</h3>
+        ${c.major?.length ? `<ul class="news-major">${c.major.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+        ${c.items?.length ? `<ul>${c.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}</section>`).join('')}
     </div>
     <div class="row"><button class="primary" id="news-close">Done</button></div>
   </div>`;
@@ -145,6 +151,13 @@ function download(filename, text, type) {
 // Shots in the order fired: [{ slot, diagram, number, shot }]. Where a diagram
 // takes two shots, which of the pair came first is not known.
 function firingSequence(rec) {
+  // A Skirmisher card has no firing order: its shots are listed box by box.
+  if (isSkirmisher(cardType(rec))) {
+    return rec.shots.map((shot, slot) => ({ slot, diagram: shotOn(rec, slot), shot }))
+      .filter(({ diagram }) => diagram >= 0)
+      .sort((a, b) => a.diagram - b.diagram || a.slot - b.slot)
+      .map((s, k) => ({ ...s, number: k + 1 }));
+  }
   const per = cardType(rec).shotsPerDiagram;
   return cardOrder(rec, settings).flatMap((d, k) =>
     Array.from({ length: per }, (_, j) => ({
@@ -508,6 +521,7 @@ async function scan(file) {
   try {
     const result = await scanCard(file, { onProgress: busy });
     const card = CARDS[result.type];
+    if (isSkirmisher(card)) return newSkirmisher(result, card);
     current = {
       id: store.newId(),
       isNew: true,
@@ -551,6 +565,25 @@ async function scan(file) {
   }
 }
 
+// A Skirmisher scan: every hole found is a shot in its box.
+function newSkirmisher(result, card) {
+  current = {
+    id: store.newId(),
+    isNew: true,
+    type: card.id,
+    date: today(),
+    name: '',
+    createdAt: new Date().toISOString(),
+    shots: result.diagrams.flatMap((d, i) => d.shots.map((s) =>
+      ({ ...(scoreMargin(s.x, s.y, card, settings) < BORDERLINE_MM ? { ...s, confidence: 'low', borderline: true } : s), on: i }))),
+    images: result.diagrams.map((d) => d.image),
+  };
+  dirty = true;
+  busy(null);
+  if (location.hash === '#/card/new') showCard('new');
+  else location.hash = '#/card/new';
+}
+
 // ---------- one card ----------
 
 async function showCard(id) {
@@ -574,6 +607,8 @@ function renderCard() {
   // Each notice is [kind, text]: 'check' (amber) asks for a look at doubtful
   // shots, 'penalty' (red) reports points taken off, '' is general guidance.
   const notes = [];
+  const skirmisher = isSkirmisher(card);
+  const tally = skirmisher ? skirmisherTally(rec, settings) : null;
   if (missing) {
     notes.push(['', `${missing} shot${missing === 1 ? ' was' : 's were'} not detected. Tap the ringed diagram${missing === 1 ? '' : 's'} and either place ` +
       `the shot or confirm there is none. The score is shown once every shot is accounted for.`]);
@@ -586,7 +621,19 @@ function renderCard() {
       const on = order.indexOf(shotOn(rec, slot)) + 1;
       return card.shotsPerDiagram === 1 && on === number ? `${number}` : `${number} (diagram ${on})`;
     });
-  if (close.length) {
+  if (skirmisher) {
+    const edge = [...new Set(firingSequence(rec).filter(({ shot }) => unsure(shot) && shot.borderline).map(({ diagram }) => diagram + 1))];
+    if (edge.length) {
+      const list = edge.length === 1 ? edge[0] : `${edge.slice(0, -1).join(', ')} and ${edge.at(-1)}`;
+      notes.push(['check', `A shot in box${edge.length === 1 ? '' : 'es'} ${list} sits right on the edge of the oval, ` +
+        `too close for a photo to call. Zoom in on it, or check the card with a gauge.`]);
+    }
+    if (tally.disallowed) {
+      const over = card.diagrams.map((_, d) => d).filter((d) => tally.boxes[d].credited < tally.boxes[d].hits).map((d) => d + 1);
+      notes.push(['penalty', `${tally.disallowed} hit${tally.disallowed === 1 ? '' : 's'} not counted, on box${over.length === 1 ? '' : 'es'} ${over.join(', ')} (marked *).<br>` +
+        `No oval scores more than ${tally.cap} until every box has had ${tally.cap} attempts, rule 5.3.4.2.`]);
+    }
+  } else if (close.length) {
     const list = close.length === 1 ? close[0] : `${close.slice(0, -1).join(', ')} and ${close.at(-1)}`;
     notes.push(['check', `Shot${close.length === 1 ? '' : 's'} ${list} ${close.length === 1 ? 'sits' : 'sit'} right on a scoring line, ` +
       `too close for a photo to call. Zoom in on ${close.length === 1 ? 'it' : 'them'}, or check the card with a gauge.`]);
@@ -607,11 +654,15 @@ function renderCard() {
     <div class="panel">
       ${cardSvg(rec, card, settings, order)}
       ${rec.isNew && card.symmetric ? '<button id="flip" class="flip-top">Card was upside down</button>' : ''}
-      ${missing
+      ${skirmisher
+        ? `<div class="score-line"><span class="big">${tally.total}</span><span class="of">from ${rec.shots.length} shot${rec.shots.length === 1 ? '' : 's'}</span></div>`
+        : missing
         ? `<div class="score-line"><span class="big pending">?</span><span class="of">Score not shown yet</span></div>`
         : `<div class="score-line"><span class="big">${cardTotal(rec, settings)}</span><span class="of">/ 100${crossFirePenalty(rec) ? ` (after ${crossFirePenalty(rec)} penalty)` : ''}</span></div>`}
       ${notes.map(([kind, text]) => `<p class="notice ${kind}">${text}</p>`).join('')}
-      <p class="muted">${esc(card.label)}, ${card.gauging} gauging. Tap any diagram to check the shots against the photo and move them if needed. The small numbers are the order fired.</p>
+      <p class="muted">${skirmisher
+        ? `${esc(card.label)}, inward gauging: a shot touching an oval is a hit. Tap any box to check its shots against the photo, move them, or add or remove one.`
+        : `${esc(card.label)}, ${card.gauging} gauging. Tap any diagram to check the shots against the photo and move them if needed. The small numbers are the order fired.`}</p>
       <div class="row">
         <label class="field">Date<input id="f-date" type="date" value="${esc(rec.date)}"></label>
         <label class="field">Competition / session<input id="f-event" type="text" maxlength="80"
@@ -620,14 +671,21 @@ function renderCard() {
       </div>
       <div class="ideas-box">
         <span class="ideas-label" id="f-ideas-label">Tap a suggestion to fill in the competition</span>
-        <div class="ideas" id="f-ideas" role="group" aria-labelledby="f-ideas-label">${competitionIdeas(rec.date)}</div>
+        <div class="ideas" id="f-ideas" role="group" aria-labelledby="f-ideas-label">${competitionIdeas(rec.date, card)}</div>
       </div>
       <label class="field notes-field">Notes for this card (optional)<textarea id="f-notes" rows="3" maxlength="4000"
         placeholder="Anything about this card: set-up changes, time limit, technique points to review">${esc(rec.notes ?? '')}</textarea></label>
     </div>
     <h2>Shots</h2>
     <div class="panel">
-      <table>
+      ${skirmisher ? `<table>
+        <tr><th>Box</th><th>Shot</th><th>X mm</th><th>Y mm</th><th>Edge of oval</th></tr>
+        ${firingSequence(rec).map(({ shot: s, diagram }) => `<tr><td>${diagram + 1}</td>
+          <td><b>${scoreShot(s.x, s.y, card, settings) ? 'Hit' : 'Miss'}</b></td><td>${mm(s.x)}</td><td>${mm(s.y)}</td>
+          <td>${(Math.max(0, ellipseDistance(s.x, s.y, card.oval.width / 2, card.oval.height / 2))).toFixed(1)}</td></tr>`).join('')}
+      </table>
+      <p class="muted">Listed box by box: a card does not show the order they were fired. X is right of the oval's centre, Y above it.
+        "Edge of oval" is how far the shot's centre is outside the oval (0 if on it).</p>` : `<table>
         <tr><th>Shot</th><th>Score</th><th>X mm</th><th>Y mm</th><th>From centre</th></tr>
         ${firingSequence(rec).map(({ shot: s, number }) => isShot(s)
           ? `<tr><td>${number}</td><td><b>${scoreShot(s.x, s.y, card, settings)}</b></td><td>${mm(s.x)}</td><td>${mm(s.y)}</td><td>${Math.hypot(s.x, s.y).toFixed(1)}</td></tr>`
@@ -635,14 +693,14 @@ function renderCard() {
             ? `<tr><td>${number}</td><td><b>0</b></td><td colspan="3" class="muted">no shot on the diagram</td></tr>`
             : `<tr><td>${number}</td><td colspan="4" class="muted">not detected, to be confirmed</td></tr>`).join('')}
       </table>
-      <p class="muted">In the order fired${card.shotsPerDiagram > 1 ? ' (the two shots on a diagram are listed together; which came first is not known)' : ''}. X is right of centre, Y is above centre.</p>
+      <p class="muted">In the order fired${card.shotsPerDiagram > 1 ? ' (the two shots on a diagram are listed together; which came first is not known)' : ''}. X is right of centre, Y is above centre.</p>`}
     </div>
     <h2>Group</h2>
     <div class="panel">${statsBlock(card, shots)}</div>
-    <details class="panel order-fold" id="order-fold" ${orderOpen ? 'open' : ''}>
+    ${card.orders ? `<details class="panel order-fold" id="order-fold" ${orderOpen ? 'open' : ''}>
       <summary>Shot order for this card<span class="muted">${esc(orderLabel(card, rec.orderSpec ?? defaultOrderSpec(settings, card)))}</span></summary>
       <div id="card-order"></div>
-    </details>
+    </details>` : ''}
     <div class="row">
       ${card.symmetric && !rec.isNew ? '<button id="flip">Card was upside down</button>' : ''}
       <button id="csv">Export CSV</button>
@@ -668,7 +726,7 @@ function renderCard() {
     touch();
   }));
   $('#f-date').addEventListener('input', () => {
-    $('#f-ideas').innerHTML = competitionIdeas(rec.date);
+    $('#f-ideas').innerHTML = competitionIdeas(rec.date, card);
     wireIdeas();
   });
   wireIdeas();
@@ -685,14 +743,16 @@ function renderCard() {
     dirty = false;
     location.hash = '#/';
   });
-  mountOrderPicker($('#card-order'), card, rec.orderSpec ?? defaultOrderSpec(settings, card), (spec) => {
-    rec.orderSpec = spec;
-    dirty = true;
-    const y = window.scrollY;
-    renderCard();
-    window.scrollTo(0, y);
-  });
-  $('#order-fold').addEventListener('toggle', (e) => { orderOpen = e.target.open; });
+  if (card.orders) {
+    mountOrderPicker($('#card-order'), card, rec.orderSpec ?? defaultOrderSpec(settings, card), (spec) => {
+      rec.orderSpec = spec;
+      dirty = true;
+      const y = window.scrollY;
+      renderCard();
+      window.scrollTo(0, y);
+    });
+    $('#order-fold').addEventListener('toggle', (e) => { orderOpen = e.target.open; });
+  }
   $('#flip')?.addEventListener('click', flipCard);
   $('#csv').addEventListener('click', () => download(`targetnotebook-${rec.date}.csv`, csvFor([rec]), 'text/csv'));
 }
@@ -740,6 +800,7 @@ async function flipCard() {
 // ---------- diagram editor ----------
 
 function openEditor(diagram) {
+  if (isSkirmisher(cardType(current))) return openBoxEditor(diagram);
   const el = $('#editor');
   const card = cardType(current);
   const per = card.shotsPerDiagram;
@@ -969,6 +1030,205 @@ function openEditor(diagram) {
   draw();
 }
 
+// Skirmisher box editor: any number of shots, each a hit or a miss. Shots
+// can be moved, added where the scan missed a hole, or removed.
+function openBoxEditor(box) {
+  const el = $('#editor');
+  const card = cardType(current);
+  const size = card.patchMm;
+  const half = size / 2;
+  const count = card.diagrams.length;
+  let zoom = 1;
+  let drag = null;
+  let active = 0; // which of this box's shots is being moved
+  let adding = false; // waiting for a tap to place a new shot
+
+  const slots = () => current.shots.map((_, i) => i).filter((i) => shotOn(current, i) === box && isShot(current.shots[i]));
+  const originFor = (s) => `${((s.x + half) / size) * 100}% ${((half - s.y) / size) * 100}%`;
+  const hitText = (s) => (scoreShot(s.x, s.y, card, settings) ? 'hit' : 'miss');
+  const pick = () => {
+    adding = false;
+    const list = slots();
+    const j = list.findIndex((i) => unsure(current.shots[i]));
+    active = j < 0 ? 0 : j;
+  };
+
+  const draw = () => {
+    const list = slots();
+    active = Math.min(active, Math.max(0, list.length - 1));
+    const i = adding ? undefined : list[active];
+    const shot = i === undefined ? null : current.shots[i];
+    const g = settings.gaugeDia / 2;
+    const { boxes, cap } = skirmisherTally(current, settings);
+    const here = boxes[box];
+    const image = current.images?.[box];
+    const others = list.filter((k) => k !== i).map((k) => current.shots[k]);
+    el.innerHTML = `<div class="ed">
+      <div class="ed-head">
+        <span class="ed-score" id="ed-score">${here.credited}</span>
+        <div class="ed-info"><small>Box ${box + 1} of ${count}: ${here.hits} hit${here.hits === 1 ? '' : 's'} from ${here.attempts} shot${here.attempts === 1 ? '' : 's'}${here.credited < here.hits ? `, ${here.credited} counted (limit ${cap})` : ''}</small>
+          <small id="ed-pos">${shot ? `X ${mm(shot.x)}  Y ${mm(shot.y)} mm, ${hitText(shot)}` : adding ? 'Adding a shot' : 'No shots in this box'}</small>
+          <small>${shot ? (shot.source === 'auto' ? `Detected${shot.confidence === 'high' ? '' : ', please check'}` : 'Placed by hand') : adding ? 'Tap the centre of the hole' : 'Add any missed shot'}</small></div>
+        <button id="ed-done" class="primary">Done</button>
+      </div>
+      <div class="row pickers">${list.map((k, j) =>
+        `<button data-pick="${j}" class="${!adding && j === active ? 'primary' : ''}">Shot ${String.fromCharCode(65 + j)}: ${hitText(current.shots[k])}</button>`).join('')}
+        ${adding ? '<button class="primary" disabled>New shot</button>' : list.length ? '' : '<button disabled>No shots in this box</button>'}</div>
+      <div class="stage" id="stage">
+        <div class="zoomer" id="zoomer" style="transform:scale(${zoom});transform-origin:${shot ? originFor(shot) : '50% 50%'}">
+          ${image ? `<img src="${image}" alt="Photo of box ${box + 1}">` : ''}
+          <svg viewBox="${-half} ${-half} ${size} ${size}">
+            ${image ? '' : `<rect x="${-half}" y="${-half}" width="${size}" height="${size}" fill="#e7caa2"/>${diagramMarkupFor(card)}`}
+            <ellipse class="ov-ring" rx="${card.oval.width / 2}" ry="${card.oval.height / 2}"/>
+            <ellipse class="ov-ring" rx="${card.oval.width / 2 + g}" ry="${card.oval.height / 2 + g}" stroke-dasharray="0.8 0.8"/>
+            ${others.map((o) => `<circle class="ov-other" cx="${o.x}" cy="${-o.y}" r="${g}"/>`).join('')}
+            ${shot ? `<circle class="ov-gauge" id="ov-gauge" cx="${shot.x}" cy="${-shot.y}" r="${g}"/>
+              <path class="ov-cross" id="ov-cross" d="M${shot.x - 1} ${-shot.y}h2M${shot.x} ${-shot.y - 1}v2"/>` : ''}
+          </svg>
+        </div>
+      </div>
+      <p class="hint">${adding
+        ? 'Tap the centre of the shot hole.'
+        : shot
+          ? `Drag anywhere to slide the blue gauge circle over the hole.${others.length ? ' Dashed circles are the other shots in this box.' : ''}`
+          : 'No shots were found in this box. If there is a hole, add it.'}</p>
+      <div class="nudge" ${shot ? '' : 'hidden'}>
+        <button data-nx="-0.1" data-ny="0" aria-label="Nudge left">←</button>
+        <button data-nx="0" data-ny="0.1" aria-label="Nudge up">↑</button>
+        <button data-nx="0" data-ny="-0.1" aria-label="Nudge down">↓</button>
+        <button data-nx="0.1" data-ny="0" aria-label="Nudge right">→</button>
+      </div>
+      <div class="row">
+        <button id="ed-zoom">${zoom > 1 ? 'Zoom out' : 'Zoom in'}</button>
+        ${adding ? '<button id="ed-cancel">Cancel adding</button>' : '<button id="ed-add">+ Add a shot</button>'}
+        ${shot ? '<button id="ed-remove">Remove shot</button>' : ''}
+      </div>
+      <div class="row">
+        <button id="ed-prev" ${box ? '' : 'disabled'}>‹ Previous box</button>
+        <button id="ed-next" ${box < count - 1 ? '' : 'disabled'}>Next box ›</button>
+      </div>
+    </div>`;
+    wire(i);
+  };
+
+  const clamp = (v) => Math.round(Math.max(-(half - 1), Math.min(half - 1, v)) * 100) / 100;
+
+  const wire = (i) => {
+    const stage = $('#stage');
+    stage.addEventListener('pointerdown', (e) => {
+      const rect = stage.getBoundingClientRect();
+      const scale = (rect.width / size);
+      if (adding) {
+        // The stage is only ever zoomed on a shot, so a new one is placed unzoomed.
+        current.shots.push({
+          x: clamp((e.clientX - rect.left) / scale - half),
+          y: clamp(half - (e.clientY - rect.top) / scale),
+          source: 'manual',
+          on: box,
+        });
+        dirty = true;
+        adding = false;
+        active = slots().indexOf(current.shots.length - 1);
+        return draw();
+      }
+      if (i === undefined) return;
+      const s = current.shots[i];
+      drag = { x: e.clientX, y: e.clientY, sx: s.x, sy: s.y, scale: scale * zoom };
+      stage.setPointerCapture(e.pointerId);
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const s = current.shots[i];
+      s.x = clamp(drag.sx + (e.clientX - drag.x) / drag.scale);
+      s.y = clamp(drag.sy - (e.clientY - drag.y) / drag.scale);
+      s.source = 'manual';
+      delete s.confidence;
+      delete s.borderline;
+      dirty = true;
+      // Move the gauge in place; a full redraw would drop the pointer capture.
+      $('#ov-gauge').setAttribute('cx', s.x);
+      $('#ov-gauge').setAttribute('cy', -s.y);
+      $('#ov-cross').setAttribute('d', `M${s.x - 1} ${-s.y}h2M${s.x} ${-s.y - 1}v2`);
+      $('#zoomer').style.transformOrigin = originFor(s);
+      $('#ed-pos').textContent = `X ${mm(s.x)}  Y ${mm(s.y)} mm, ${hitText(s)}`;
+    });
+    const end = () => {
+      if (!drag) return;
+      drag = null;
+      draw();
+    };
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+    el.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
+      confirmShots();
+      adding = false;
+      active = Number(b.dataset.pick);
+      zoom = 1;
+      draw();
+    }));
+    el.querySelectorAll('.nudge button').forEach((b) => b.addEventListener('click', () => {
+      const s = current.shots[i];
+      if (!isShot(s)) return;
+      s.x = clamp(s.x + Number(b.dataset.nx));
+      s.y = clamp(s.y + Number(b.dataset.ny));
+      s.source = 'manual';
+      delete s.confidence;
+      delete s.borderline;
+      dirty = true;
+      draw();
+    }));
+    $('#ed-zoom').addEventListener('click', () => {
+      zoom = zoom > 1 ? 1 : 3;
+      draw();
+    });
+    $('#ed-add')?.addEventListener('click', () => {
+      adding = true;
+      zoom = 1;
+      draw();
+    });
+    $('#ed-cancel')?.addEventListener('click', () => {
+      adding = false;
+      draw();
+    });
+    $('#ed-remove')?.addEventListener('click', () => {
+      current.shots.splice(i, 1);
+      dirty = true;
+      zoom = 1;
+      draw();
+    });
+    const go = (step) => {
+      confirmShots();
+      box += step;
+      zoom = 1;
+      pick();
+      draw();
+    };
+    $('#ed-prev').addEventListener('click', () => go(-1));
+    $('#ed-next').addEventListener('click', () => go(1));
+    $('#ed-done').addEventListener('click', () => {
+      confirmShots();
+      el.hidden = true;
+      el.innerHTML = '';
+      renderCard();
+    });
+  };
+
+  // Looking at a box's detected shots and moving on counts as checking them.
+  const confirmShots = () => {
+    for (const k of slots()) {
+      const s = current.shots[k];
+      if (unsure(s)) {
+        s.confidence = 'high';
+        dirty = true;
+      }
+    }
+  };
+
+  el.hidden = false;
+  pick();
+  draw();
+}
+
 // ---------- analysis ----------
 
 // Which cards Analysis looks at. `last` is 'all', a number of latest cards
@@ -977,7 +1237,10 @@ function openEditor(diagram) {
 let scope = { type: null, last: 'all', name: '', count: 10, from: '', to: '', picked: null };
 
 async function showAnalysis() {
-  const everything = await store.listCards();
+  // Skirmisher cards (hits, not points out of 100) are not analysed for now.
+  const stored = await store.listCards();
+  const everything = stored.filter((rec) => !isSkirmisher(cardType(rec)));
+  const skipped = stored.length - everything.length;
   const types = Object.values(CARDS).filter((c) => everything.some((rec) => cardType(rec) === c));
   // Different cards have different rings and gauging, so they are analysed separately.
   const card = types.find((c) => c.id === scope.type) ?? types[0] ?? CARDS[DEFAULT_TYPE];
@@ -1079,6 +1342,7 @@ async function showAnalysis() {
     <p class="muted filter-summary">${recs.length
       ? `Analysing ${recs.length} card${recs.length === 1 ? '' : 's'}${span[0] === span[1] ? `, from ${esc(niceDate(span[0]))}` : `, ${esc(niceDate(span[0]))} to ${esc(niceDate(span[1]))}`}.`
       : 'No cards chosen.'}</p>
+    ${skipped ? `<p class="muted">Skirmisher cards are not included in Analysis.</p>` : ''}
     </div>
     ${recs.length ? `
     <h2>Scores</h2>
@@ -1184,7 +1448,7 @@ async function showSettings() {
       </select></label>
       <p class="muted">Choosing left-handed ticks "Mirror image" on the shot orders below, and right-handed unticks it. You can still change those boxes yourself afterwards.</p>
     </div>
-    ${Object.values(CARDS).map((c) => `
+    ${Object.values(CARDS).filter((c) => c.orders).map((c) => `
     <h2>Default shot order, ${esc(c.label)}</h2>
     <div class="panel">
       <div id="s-order-${c.id}"></div>
@@ -1243,7 +1507,7 @@ async function showSettings() {
     // Saved cards keep the order they were scanned with.
     const mirror = handedness === 'left';
     const orders = {};
-    for (const c of Object.values(CARDS)) {
+    for (const c of Object.values(CARDS).filter((k) => k.orders)) {
       if (c.id !== DEFAULT_TYPE) orders[c.id] = { ...defaultOrderSpec(settings, c), mirror };
     }
     settings = {
@@ -1255,7 +1519,7 @@ async function showSettings() {
     await store.putSettings(settings);
     showSettings();
   });
-  for (const c of Object.values(CARDS)) {
+  for (const c of Object.values(CARDS).filter((k) => k.orders)) {
     mountOrderPicker($(`#s-order-${c.id}`), c, defaultOrderSpec(settings, c), async (spec) => {
       settings = c.id === DEFAULT_TYPE
         ? { ...settings, shotOrder: spec }

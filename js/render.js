@@ -1,16 +1,18 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { scoreShot, isShot, isMiss, slotsOn } from './model.js?v=2026.11.08-1';
+import { scoreShot, isShot, isMiss, slotsOn, isSkirmisher, skirmisherTally } from './model.js?v=2026.11.08-2';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';
 const f = (v) => (Math.round(v * 100) / 100).toString();
 
 // Radius of everything printed for one diagram (rings can lie outside the black).
-export const diagramReach = (card) => Math.max(card.aimingMarkDia, ...card.rings.map((r) => r.dia)) / 2;
+export const diagramReach = (card) =>
+  card.oval ? card.oval.height / 2 : Math.max(card.aimingMarkDia, ...card.rings.map((r) => r.dia)) / 2;
 
 export function diagramMarkup(card) {
+  if (card.oval) return `<ellipse rx="${f(card.oval.width / 2)}" ry="${f(card.oval.height / 2)}" fill="${INK}"/>`;
   const markR = card.aimingMarkDia / 2;
   const rings = card.rings
     .filter((r) => Math.abs(r.dia / 2 - markR) > 0.2)
@@ -30,8 +32,37 @@ export function shotMarkup(shot, settings, cls = '') {
   return `<circle class="shot ${unsure(shot) ? 'unsure' : ''} ${cls}" cx="${f(shot.x)}" cy="${f(-shot.y)}" r="${f(settings.gaugeDia / 2)}"/>`;
 }
 
+// A Skirmisher card: the ruled boxes, each with its oval and shots, numbered
+// in reading order and labelled with the hits it is credited with.
+function skirmisherSvg(rec, card, settings) {
+  const W = card.width;
+  const H = card.height;
+  const { boxes } = skirmisherTally(rec, settings);
+  const bw = card.box.width;
+  const bh = card.box.height;
+  const cells = card.diagrams
+    .map((d, i) => {
+      const placed = slotsOn(rec, i).map((j) => rec.shots[j]).filter(isShot);
+      const check = placed.some(unsure);
+      const { credited, hits } = boxes[i];
+      return `<g class="dg" data-d="${i}" transform="translate(${d.x} ${d.y})" role="button" aria-label="Box ${i + 1}">
+        <rect x="${-bw / 2}" y="${-bh / 2}" width="${bw}" height="${bh}" fill="transparent" stroke="${INK}" stroke-width="0.3"/>
+        ${diagramMarkup(card)}
+        ${placed.map((s) => shotMarkup(s, settings)).join('')}
+        <text class="dnum" x="${f(-bw / 2 + 7)}" y="${f(-bh / 2 + 11)}" style="font-size:9px">${i + 1}</text>
+        <text class="dscore ${check ? 'check' : ''}" x="${f(bw / 2 - 9)}" y="${f(-bh / 2 + 13)}">${credited < hits ? `${credited}*` : credited}</text>
+      </g>`;
+    })
+    .join('');
+  return `<svg class="card-svg" viewBox="${-W / 2} ${-H / 2} ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="${-W / 2}" y="${-H / 2}" width="${W}" height="${H}" fill="${PAPER}"/>
+    ${cells}
+  </svg>`;
+}
+
 // `order` is the firing order of the diagrams; each is labelled with its place in it.
 export function cardSvg(rec, card, settings, order) {
+  if (isSkirmisher(card)) return skirmisherSvg(rec, card, settings);
   const W = card.width;
   const H = card.height;
   const per = card.shotsPerDiagram;
