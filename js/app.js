@@ -480,6 +480,14 @@ async function showCards() {
       pane.hidden = key !== which;
       $(`#${key}`).setAttribute('aria-expanded', String(key === which));
     }
+    // The buttons stay at the top as the page scrolls, but what they open sits
+    // under them at the top of the page, so bring it into view.
+    if (!which) return;
+    const bar = $('.top-actions').getBoundingClientRect();
+    const top = panes[which].getBoundingClientRect().top;
+    if (top > bar.bottom + 1) return;
+    const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: Math.max(0, scrollY + top - bar.height - 8), behavior: smooth ? 'smooth' : 'auto' });
   };
   const toggle = (open) => show(open ? 'add' : null);
   $('#add').addEventListener('click', () => show(panes.add.hidden ? 'add' : null));
