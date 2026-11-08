@@ -2,13 +2,14 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec,
-} from './model.js?v=2026.10.18-10';
-import * as store from './store.js?v=2026.10.18-10';
-import { scanCard, ScanError } from './detect.js?v=2026.10.18-10';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.10.18-10';
+} from './model.js?v=2026.11.08-1';
+import * as store from './store.js?v=2026.11.08-1';
+import { scanCard, ScanError } from './detect.js?v=2026.11.08-1';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg } from './render.js?v=2026.11.08-1';
+import { CHANGES } from './changes.js?v=2026.11.08-1';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.10.18-10';
+const VERSION = '2026.11.08-1';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -50,6 +51,8 @@ const BORDERLINE_MM = 0.3;
 const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high';
 
 let settings;
+// Whether the shot order section of a card is expanded (kept while the card redraws).
+let orderOpen = false;
 let current = null; // the card being viewed or edited
 let dirty = false;
 let note = null; // the training note being written or edited
@@ -88,6 +91,40 @@ function dialog(message, buttons) {
 const ask = (message, yes, no = 'Cancel') =>
   dialog(message, [{ label: no, value: false }, { label: yes, value: true, primary: true }]);
 const tell = (message) => dialog(message, [{ label: 'OK', value: true, primary: true }]);
+
+// What's new: the button in the header lights up until the newest entry has been read.
+function showChanges() {
+  const el = $('#dialog');
+  el.innerHTML = `<div class="dialog-box news-box" role="dialog" aria-modal="true" aria-labelledby="news-title">
+    <h2 id="news-title">What's new</h2>
+    <div class="news-list">${CHANGES.map((c) => `
+      <section><h3>${esc(c.date)}</h3><ul>${c.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></section>`).join('')}
+    </div>
+    <div class="row"><button class="primary" id="news-close">Done</button></div>
+  </div>`;
+  el.hidden = false;
+  const close = () => { el.hidden = true; el.innerHTML = ''; };
+  $('#news-close').addEventListener('click', close);
+  el.addEventListener('click', (e) => { if (e.target === el) close(); }, { once: true });
+  $('#news-close').focus();
+  $('#news').classList.remove('fresh');
+  store.putSeenChanges(CHANGES[0].id).catch(() => {});
+}
+
+async function setUpChanges() {
+  $('#news').addEventListener('click', showChanges);
+  const seen = await store.getSeenChanges();
+  if (seen === CHANGES[0].id) return;
+  if (seen === undefined) {
+    // A brand-new device has nothing to compare with, so there is nothing "new" to flag.
+    const [cards, notes, rifle] = await Promise.all([store.listCards(), store.listNotes(), store.getRifle()]);
+    if (!cards.length && !notes.length && !rifle) {
+      await store.putSeenChanges(CHANGES[0].id);
+      return;
+    }
+  }
+  $('#news').classList.add('fresh');
+}
 
 function busy(text) {
   $('#busy').hidden = text === null;
@@ -156,8 +193,15 @@ function statsBlock(card, shots) {
       <span class="muted">Sight correction to centre this group</span><br>
       <b>${moves.length ? moves.join(', ') : 'None needed'}</b>
       <p class="muted">The group centre is ${Math.abs(st.mx).toFixed(1)} mm ${st.mx >= 0 ? 'right' : 'left'} and ${Math.abs(st.my).toFixed(1)} mm ${st.my >= 0 ? 'high' : 'low'}.
-      One click moves the shot ${corr.clickMm.toFixed(2)} mm at 25 yards. Directions say which way the shots need to move.</p>
+      One click moves the shot ${corr.clickMm.toFixed(2)} mm at 25 yards.</p>
     </div>`;
+}
+
+// Short name of a shot order, as the collapsed shot order section shows it.
+function orderLabel(card, spec) {
+  if (spec?.method === 'custom') return 'Custom';
+  const name = (card.orders[spec?.method] ?? card.orders.clockwise).label;
+  return spec?.mirror ? `${name}, mirrored` : name;
 }
 
 // A firing-order chooser: a picture of the card for each method (tap to
@@ -249,7 +293,8 @@ async function photoDataUrl(file, maxSide = 1400) {
 
 // Short free-text fields, shown together on one line: key, label, longest entry.
 const RIFLE_TEXT = [['name', 'Rifle name', 4], ['slingNumber', 'Sling number', 3], ['jacket', 'Jacket', 4]];
-// Fields with − and + buttons: key, label, step. They can also be typed into.
+// Fields with − and + buttons: key, label, step. Anything can be typed into
+// them; the buttons step the value whenever it is a plain number (or blank).
 const RIFLE_STEPS = [
   ['handstop', 'Handstop position', 0.5],
   ['sling', 'Sling length', 1],
@@ -262,9 +307,15 @@ const RIFLE_PHOTOS = [['buttplate', 'Buttplate position'], ['cheekpiece', 'Cheek
 async function mountRifle(el) {
   const rifle = { name: '', slingNumber: '', jacket: '', handstop: null, sling: null, foresight: null, spacers: 0, ...(await store.getRifle()) };
   rifle.photos = { ...rifle.photos };
-  // Anything that is not a number (an old free-text entry, say) shows as empty.
-  const has = (key) => rifle[key] !== null && rifle[key] !== '' && Number.isFinite(Number(rifle[key]));
-  const shown = (key, step) => (!has(key) ? '' : step < 1 ? Number(rifle[key]).toFixed(1) : String(Number(rifle[key])));
+  // Values are numbers when set with the buttons (and in set-ups saved before
+  // these fields took text), or the text exactly as typed.
+  const blank = (key) => rifle[key] === null || rifle[key] === undefined || String(rifle[key]).trim() === '';
+  const numeric = (key) => blank(key) || Number.isFinite(Number(rifle[key]));
+  const shown = (key, step) => {
+    if (blank(key)) return '';
+    if (typeof rifle[key] !== 'number') return String(rifle[key]);
+    return step < 1 ? rifle[key].toFixed(1) : String(rifle[key]);
+  };
   const save = async () => {
     await store.putRifle({ ...rifle, updatedAt: new Date().toISOString() });
     const note = el.querySelector('.saved');
@@ -279,9 +330,9 @@ async function mountRifle(el) {
       ${RIFLE_STEPS.map(([key, label, step]) => `
         <div class="field">${label}
           <div class="stepper">
-            <button data-step="${-step}" data-key="${key}" aria-label="Decrease ${label}">−</button>
-            <input type="number" inputmode="${step < 1 ? 'decimal' : 'numeric'}" step="${step}" min="0" data-num="${key}" value="${shown(key, step)}" placeholder="–">
-            <button data-step="${step}" data-key="${key}" aria-label="Increase ${label}">+</button>
+            <button data-step="${-step}" data-key="${key}" aria-label="Decrease ${label}" ${numeric(key) ? '' : 'disabled'}>−</button>
+            <input type="text" maxlength="40" autocomplete="off" data-num="${key}" value="${esc(shown(key, step))}" placeholder="–">
+            <button data-step="${step}" data-key="${key}" aria-label="Increase ${label}" ${numeric(key) ? '' : 'disabled'}>+</button>
           </div>
         </div>`).join('')}
       <div class="photos">
@@ -297,20 +348,33 @@ async function mountRifle(el) {
       </div>
       <p class="muted saved">Changes are saved as you make them.</p>`;
     const step = (key) => RIFLE_STEPS.find((r) => r[0] === key)[2];
-    const setNumber = (key, value) => {
-      if (value === null || Number.isNaN(value)) rifle[key] = null;
-      else rifle[key] = step(key) < 1 ? Math.max(0, Math.round(value * 10) / 10) : Math.max(0, Math.round(value));
+    const refresh = (key) => {
       el.querySelector(`[data-num=${key}]`).value = shown(key, step(key));
+      el.querySelectorAll(`[data-step][data-key=${key}]`).forEach((b) => { b.disabled = !numeric(key); });
       save();
+    };
+    const setNumber = (key, value) => {
+      rifle[key] = step(key) < 1 ? Math.max(0, Math.round(value * 10) / 10) : Math.max(0, Math.round(value));
+      refresh(key);
     };
     el.querySelectorAll('[data-text]').forEach((input) => input.addEventListener('change', () => {
       rifle[input.dataset.text] = input.value.trim();
       save();
     }));
-    el.querySelectorAll('[data-num]').forEach((input) => input.addEventListener('change', () =>
-      setNumber(input.dataset.num, input.value === '' ? null : Number(input.value))));
-    el.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () =>
-      setNumber(b.dataset.key, (has(b.dataset.key) ? Number(rifle[b.dataset.key]) : 0) + Number(b.dataset.step))));
+    el.querySelectorAll('[data-num]').forEach((input) => input.addEventListener('input', () => {
+      // Keep the buttons in step with what is being typed.
+      const ok = input.value.trim() === '' || Number.isFinite(Number(input.value));
+      el.querySelectorAll(`[data-step][data-key=${input.dataset.num}]`).forEach((b) => { b.disabled = !ok; });
+    }));
+    el.querySelectorAll('[data-num]').forEach((input) => input.addEventListener('change', () => {
+      const text = input.value.trim();
+      rifle[input.dataset.num] = text === '' ? null : text;
+      refresh(input.dataset.num);
+    }));
+    el.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => {
+      if (!numeric(b.dataset.key)) return;
+      setNumber(b.dataset.key, (blank(b.dataset.key) ? 0 : Number(rifle[b.dataset.key])) + Number(b.dataset.step));
+    }));
     el.querySelectorAll('[data-photo]').forEach((input) => input.addEventListener('change', async () => {
       const file = input.files[0];
       if (!file) return;
@@ -485,6 +549,7 @@ async function showCard(id) {
   if (id === 'new') {
     if (!current?.isNew) return void (location.hash = '#/');
   } else if (current?.id !== id || current.isNew) {
+    orderOpen = false;
     current = await store.getCard(id);
     dirty = false;
     if (!current) return void (location.hash = '#/');
@@ -498,7 +563,6 @@ function renderCard() {
   const order = cardOrder(rec, settings);
   const shots = cardShots(rec);
   const missing = unaccounted(rec);
-  const toCheck = rec.shots.filter(unsure).length;
   // Each notice is [kind, text]: 'check' (amber) asks for a look at doubtful
   // shots, 'penalty' (red) reports points taken off, '' is general guidance.
   const notes = [];
@@ -506,11 +570,18 @@ function renderCard() {
     notes.push(['', `${missing} shot${missing === 1 ? ' was' : 's were'} not detected. Tap the ringed diagram${missing === 1 ? '' : 's'} and either place ` +
       `the shot or confirm there is none. The score is shown once every shot is accounted for.`]);
   }
-  const close = rec.shots.filter((s) => unsure(s) && s.borderline).length;
-  if (toCheck) {
-    notes.push(['check', `${toCheck} shot${toCheck === 1 ? '' : 's'} (pale, dashed) should be checked. Tap to confirm or adjust.` +
-      (close ? ` ${close} of ${close === 1 ? 'them sits' : 'them sit'} right on a scoring line, too close for a photo to call. ` +
-        'Zoom in on it, or check the card with a gauge.' : '')]);
+  // Shots the detector was unsure of are shown pale and dashed on the card;
+  // only those sitting on a scoring line get a notice, naming them.
+  const close = firingSequence(rec).filter(({ shot }) => unsure(shot) && shot.borderline)
+    // With one shot per diagram the shot number is the diagram number, unless it was a cross-shot.
+    .map(({ number, slot }) => {
+      const on = order.indexOf(shotOn(rec, slot)) + 1;
+      return card.shotsPerDiagram === 1 && on === number ? `${number}` : `${number} (diagram ${on})`;
+    });
+  if (close.length) {
+    const list = close.length === 1 ? close[0] : `${close.slice(0, -1).join(', ')} and ${close.at(-1)}`;
+    notes.push(['check', `Shot${close.length === 1 ? '' : 's'} ${list} ${close.length === 1 ? 'sits' : 'sit'} right on a scoring line, ` +
+      `too close for a photo to call. Zoom in on ${close.length === 1 ? 'it' : 'them'}, or check the card with a gauge.`]);
   }
   const penalty = crossFirePenalty(rec);
   if (penalty) {
@@ -524,9 +595,10 @@ function renderCard() {
       `The strongest ${card.shotsPerDiagram === 1 ? 'one is' : 'two are'} placed; check ${which.length === 1 ? 'it' : 'them'} against the card.`]);
   }
   view.innerHTML = `
-    <a class="back" href="#/">‹ Dashboard</a>
+    <div class="back-bar"><a class="back" href="#/">‹ Dashboard</a></div>
     <div class="panel">
       ${cardSvg(rec, card, settings, order)}
+      ${rec.isNew && card.symmetric ? '<button id="flip" class="flip-top">Card was upside down</button>' : ''}
       ${missing
         ? `<div class="score-line"><span class="big pending">?</span><span class="of">Score not shown yet</span></div>`
         : `<div class="score-line"><span class="big">${cardTotal(rec, settings)}</span><span class="of">/ 100${crossFirePenalty(rec) ? ` (after ${crossFirePenalty(rec)} penalty)` : ''}</span></div>`}
@@ -539,7 +611,7 @@ function renderCard() {
           placeholder="e.g. Practice, BSSRA Autumn League" value="${esc(rec.name)}"></label>
       </div>
       <div class="ideas-box">
-        <span class="ideas-label" id="f-ideas-label">Suggestions</span>
+        <span class="ideas-label" id="f-ideas-label">Tap a suggestion to fill in the competition</span>
         <div class="ideas" id="f-ideas" role="group" aria-labelledby="f-ideas-label">${competitionIdeas(rec.date)}</div>
       </div>
       <label class="field notes-field">Notes for this card (optional)<textarea id="f-notes" rows="3" maxlength="4000"
@@ -559,10 +631,12 @@ function renderCard() {
     </div>
     <h2>Group</h2>
     <div class="panel">${statsBlock(card, shots)}</div>
-    <h2>Shot order for this card</h2>
-    <div class="panel" id="card-order"></div>
+    <details class="panel order-fold" id="order-fold" ${orderOpen ? 'open' : ''}>
+      <summary>Shot order for this card<span class="muted">${esc(orderLabel(card, rec.orderSpec ?? defaultOrderSpec(settings, card)))}</span></summary>
+      <div id="card-order"></div>
+    </details>
     <div class="row">
-      ${card.symmetric ? '<button id="flip">Card was upside down</button>' : ''}
+      ${card.symmetric && !rec.isNew ? '<button id="flip">Card was upside down</button>' : ''}
       <button id="csv">Export CSV</button>
     </div>
     <div class="actions">
@@ -610,6 +684,7 @@ function renderCard() {
     renderCard();
     window.scrollTo(0, y);
   });
+  $('#order-fold').addEventListener('toggle', (e) => { orderOpen = e.target.open; });
   $('#flip')?.addEventListener('click', flipCard);
   $('#csv').addEventListener('click', () => download(`targetnotebook-${rec.date}.csv`, csvFor([rec]), 'text/csv'));
 }
@@ -1215,7 +1290,7 @@ async function showNote(id) {
   }
   const n = note;
   view.innerHTML = `
-    <a class="back" href="#/">‹ Dashboard</a>
+    <div class="back-bar"><a class="back" href="#/">‹ Dashboard</a></div>
     <div class="panel">
       <label class="field">Date<input id="n-date" type="date" value="${esc(n.date)}"></label>
       <label class="field notes-field">Training note<textarea id="n-text" rows="12" maxlength="20000"
@@ -1311,4 +1386,5 @@ window.addEventListener('beforeunload', (e) => {
 
 settings = await store.getSettings();
 await route();
+setUpChanges().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');

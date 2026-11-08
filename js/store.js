@@ -1,6 +1,6 @@
 // On-device storage (IndexedDB): saved cards and settings.
 
-import { DEFAULT_SETTINGS } from './model.js?v=2026.10.18-10';
+import { DEFAULT_SETTINGS } from './model.js?v=2026.11.08-1';
 
 // Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';
@@ -70,6 +70,10 @@ export async function putNote(note) {
 export async function deleteNote(id) {
   await putNotes((await listNotes()).filter((n) => n.id !== id));
 }
+
+// The newest What's new entry this device has been shown.
+export const getSeenChanges = () => run('kv', 'readonly', (s) => s.get('seenChanges'));
+export const putSeenChanges = (id) => run('kv', 'readwrite', (s) => s.put(id, 'seenChanges'));
 
 export async function exportData({ images }) {
   const cards = await listCards();
