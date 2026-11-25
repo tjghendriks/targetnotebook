@@ -1,0 +1,22 @@
+# Target Notebook coach server (Cloudflare Worker + D1). See server/README.md.
+name = "targetnotebook-coach"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "targetnotebook-coach"
+database_id = "9796ef8c-51e7-4b4e-a493-e9359cd93e4f"
+
+[vars]
+# Where the app is served from: pupils' apps may send from these origins, and
+# the dashboard borrows the app's scoring and drawing code from APP_URL.
+APP_URL = "https://tjghendriks.github.io/targetnotebook/"
+APP_ORIGINS = "https://tjghendriks.github.io,http://localhost:8765"
+# Cloudflare Access, which guards the dashboard: your team name (the part
+# before .cloudflareaccess.com) and the application's audience (AUD) tag.
+ACCESS_TEAM = ""
+ACCESS_AUD = ""
+
+# JOIN_CODE, the squad code in the pupils' setup link, is a secret:
+#   npx wrangler secret put JOIN_CODE

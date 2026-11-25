@@ -9,6 +9,13 @@
 
 export const CHANGES = [
   {
+    id: '2026-11-25',
+    date: '25 November 2026',
+    major: [
+      'Send your cards to your coach: open your coach\'s setup link, and your cards go to them as you save them.',
+    ],
+  },
+  {
     id: '2026-11-08-skirmisher',
     date: '8 November 2026',
     major: [

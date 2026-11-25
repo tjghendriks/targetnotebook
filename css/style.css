@@ -480,3 +480,8 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; min-height: 
 .order-fold > summary { cursor: pointer; font-weight: 700; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
 .order-fold > summary span { font-weight: 600; font-size: 14px; }
 .order-fold[open] > summary { margin-bottom: 12px; }
+
+/* Dashboard: cards waiting to be sent to the coach */
+.coach-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.coach-bar span { font-weight: 600; }
+.coach-bar button { flex: none; }

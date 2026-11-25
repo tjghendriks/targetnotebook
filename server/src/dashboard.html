@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Squad Cards</title>
+<style>
+  :root {
+    --bg: #eef1f6; --panel: #fff; --ink: #16202e; --muted: #5b6878; --line: #dbe1ea;
+    --blue: #1a5fd0; --blue-deep: #0f3f91; --blue-soft: #e6eefc; --tile: #f3f5f9; --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { background: var(--blue); color: #fff; padding: 14px 18px; border-radius: var(--radius); margin: 12px auto 0; max-width: 1100px; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  header h1 { font-size: 19px; margin: 0; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  h2 { font-size: 13px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin: 22px 4px 8px; }
+  .panel { background: var(--panel); border-radius: var(--radius); padding: 16px; box-shadow: 0 1px 2px rgba(22,32,46,0.06); overflow-x: auto; }
+  .muted { color: var(--muted); font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.pick { cursor: pointer; }
+  tr.pick:hover td { background: var(--blue-soft); }
+  tr.on td { background: var(--blue-soft); font-weight: 600; }
+  button, select, input { font: inherit; }
+  button { border: 1px solid var(--line); background: var(--panel); color: var(--blue-deep); border-radius: 10px; padding: 6px 12px; cursor: pointer; font-weight: 600; }
+  button.danger { color: #b42318; }
+  select, input { border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; background: var(--tile); color: var(--ink); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .setup { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center; }
+  .setup code { display: block; word-break: break-all; background: var(--tile); padding: 8px 10px; border-radius: 10px; font-size: 12px; }
+  #qr { background: #fff; padding: 8px; border-radius: 10px; border: 1px solid var(--line); }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 800px) { .grid2, .setup { grid-template-columns: 1fr; } }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .stat { background: var(--tile); border-radius: 10px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  /* The app's card drawing */
+  .card-svg { display: block; width: 100%; height: auto; border-radius: 10px; margin-bottom: 10px; }
+  .shot { fill: rgba(58, 140, 255, 0.78); stroke: #fff; stroke-width: 0.4; }
+  .shot.unsure { fill: rgba(255, 255, 255, 0.55); stroke-dasharray: 1 0.7; }
+  .numeral { font: 600 3.2px sans-serif; text-anchor: middle; dominant-baseline: middle; }
+  .dnum { font: 600 5px sans-serif; fill: #6b5a43; text-anchor: middle; }
+  .dscore { font: 700 11px sans-serif; fill: #16202e; text-anchor: middle; }
+  .dscore.pair { font-size: 9px; }
+  .needs { fill: none; stroke: var(--blue); stroke-width: 1.4; stroke-dasharray: 4 3; }
+  .error { color: #b42318; }
+</style>
+</head>
+<body>
+<header><h1>Squad Cards</h1><span class="muted" style="color:#dce7fb" id="when"></span></header>
+<main id="main"><p class="muted">Loading…</p></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script type="module">
+// The app's own scoring and drawing, so the dashboard always agrees with it.
+const APP = '%APP_URL%';
+let CARDS, DEFAULT_SETTINGS, cardType, cardTotal, unaccounted, cardShots, groupStats, isSkirmisher, cardOrder, cardSvg;
+try {
+  ({ CARDS, DEFAULT_SETTINGS, cardType, cardTotal, unaccounted, cardShots, groupStats, isSkirmisher, cardOrder } = await import(`${APP}js/model.js`));
+  ({ cardSvg } = await import(`${APP}js/render.js`));
+} catch {
+  document.getElementById('main').innerHTML = `<div class="panel"><p class="error">Could not load the app's scoring code from ${APP}.
+    Check APP_URL in wrangler.toml.</p></div>`;
+  throw new Error('App code not loaded');
+}
+
+const settings = DEFAULT_SETTINGS;
+const main = document.getElementById('main');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const day = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '–');
+const f1 = (v) => (v === null || Number.isNaN(v) ? '–' : v.toFixed(1));
+
+let data;
+let type = null;
+let chosen = null; // pupil label
+let shown = null; // card shown in detail
+
+async function load() {
+  const res = await fetch('/api/coach/data', { cache: 'no-store' });
+  if (!res.ok) throw new Error(`The server said ${res.status}.`);
+  data = await res.json();
+  document.getElementById('when').textContent = `Updated ${new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+// A pupil is everything sent from devices carrying the same label.
+const label = (d) => d.pupil || d.name;
+function pupils() {
+  const byLabel = new Map();
+  for (const d of data.devices) {
+    const p = byLabel.get(label(d)) ?? { name: label(d), devices: [], cards: [] };
+    p.devices.push(d);
+    byLabel.set(label(d), p);
+  }
+  for (const c of data.cards) {
+    const d = data.devices.find((x) => x.id === c.deviceId);
+    if (d) byLabel.get(label(d)).cards.push(c.card);
+  }
+  for (const p of byLabel.values()) p.cards.sort((a, b) => (b.date + (b.createdAt ?? '')).localeCompare(a.date + (a.createdAt ?? '')));
+  return [...byLabel.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+const sd = (a) => (a.length > 1 ? Math.sqrt(a.reduce((s, v) => s + (v - mean(a)) ** 2, 0) / (a.length - 1)) : null);
+// The score they reach on four cards in five.
+const floor = (a) => {
+  if (a.length < 5) return null;
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.floor(0.2 * (s.length - 1))];
+};
+
+function summary(cards) {
+  const full = cards.filter((c) => !unaccounted(c));
+  const totals = full.map((c) => cardTotal(c, settings));
+  const groups = full.map((c) => groupStats(cardShots(c))).filter((g) => g && g.n >= 2);
+  return {
+    n: cards.length,
+    totals,
+    avg: totals.length ? mean(totals) : null,
+    sd: sd(totals),
+    floor: floor(totals),
+    best: totals.length ? Math.max(...totals) : null,
+    radius: groups.length ? mean(groups.map((g) => g.meanRadius)) : null,
+    sdx: groups.length ? mean(groups.map((g) => g.sdx)) : null,
+    sdy: groups.length ? mean(groups.map((g) => g.sdy)) : null,
+    last: cards[0]?.date ?? null,
+  };
+}
+
+function render() {
+  const all = pupils();
+  const types = Object.values(CARDS).filter((c) => data.cards.some((x) => cardType(x.card) === c));
+  const card = types.find((c) => c.id === type) ?? types.find((c) => !isSkirmisher(c)) ?? types[0];
+  type = card?.id ?? null;
+  const ofType = (p) => p.cards.filter((c) => cardType(c) === card);
+  const pupil = all.find((p) => p.name === chosen);
+  const rows = all.map((p) => ({ p, s: summary(ofType(p)) }));
+  const skirm = card && isSkirmisher(card);
+  main.innerHTML = `
+    <h2>Pupils</h2>
+    <div class="panel">
+      ${types.length > 1 ? `<div class="row" style="margin-bottom:10px"><label>Card type <select id="type">
+        ${types.map((c) => `<option value="${c.id}" ${c === card ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></label></div>` : ''}
+      ${all.length ? `<table>
+        <tr><th>Pupil</th><th class="num">Cards</th><th class="num">Average</th><th class="num">Spread (SD)</th>
+          <th class="num">Floor</th><th class="num">Best</th>${skirm ? '' : '<th class="num">Mean radius mm</th><th class="num">SD across / up mm</th>'}<th>Last card</th></tr>
+        ${rows.map(({ p, s }) => `<tr class="pick ${p.name === chosen ? 'on' : ''}" data-pupil="${esc(p.name)}">
+          <td>${esc(p.name)}</td><td class="num">${s.n}</td><td class="num">${f1(s.avg)}</td><td class="num">${f1(s.sd)}</td>
+          <td class="num">${s.floor ?? '–'}</td><td class="num">${s.best ?? '–'}</td>
+          ${skirm ? '' : `<td class="num">${f1(s.radius)}</td><td class="num">${f1(s.sdx)} / ${f1(s.sdy)}</td>`}
+          <td>${s.last ? day(s.last) : '–'}</td></tr>`).join('')}
+      </table>
+      <p class="muted">${card ? esc(card.label) : ''} cards only. Spread is how much their card totals vary: smaller is more reliable.
+        Floor is the score they reach on four cards in five (needs 5 cards).${skirm ? '' : ' Mean radius and SD are the average group on a card, from each shot\'s position.'}
+        Click a pupil to see their cards.</p>`
+      : '<p class="muted">No pupils have sent cards yet. Share the setup link below with them.</p>'}
+    </div>
+    ${pupil ? pupilPanel(pupil, ofType(pupil)) : ''}
+    <h2>Pupil setup link</h2>
+    <div class="panel">
+      ${data.setup ? `<div class="setup"><div id="qr"></div><div>
+        <p>Pupils open this link (or scan the code) on the phone they use for Target Notebook, then type their name. Their app can then send you their cards.</p>
+        <code>${esc(data.setup)}</code>
+        <div class="row" style="margin-top:8px"><button id="copy">Copy link</button></div>
+        <p class="muted">Anyone with this link can send you cards, so share it only with your squad. To stop an old link working, change the JOIN_CODE secret.</p>
+      </div></div>` : '<p class="error">Set the JOIN_CODE secret on the server to make a setup link.</p>'}
+    </div>
+    <h2>Devices</h2>
+    <div class="panel">
+      ${data.devices.length ? `<table>
+        <tr><th>Name typed</th><th>Shown as</th><th>Joined</th><th>Last sent</th><th></th></tr>
+        ${data.devices.map((d) => `<tr><td>${esc(d.name)}</td>
+          <td><input data-label="${esc(d.id)}" value="${esc(d.pupil ?? '')}" placeholder="${esc(d.name)}" maxlength="60"></td>
+          <td>${day(d.created_at)}</td><td>${day(d.last_seen)}</td>
+          <td><button class="danger" data-remove="${esc(d.id)}">Remove</button></td></tr>`).join('')}
+      </table>
+      <p class="muted">Give two devices the same "Shown as" name to treat them as one pupil. Remove deletes a device and every card it sent.</p>`
+      : '<p class="muted">No devices yet.</p>'}
+    </div>`;
+  wire();
+  if (data.setup && window.QRCode) new QRCode(document.getElementById('qr'), { text: data.setup, width: 160, height: 160 });
+}
+
+function pupilPanel(p, cards) {
+  const card = shown && cards.find((c) => c.id === shown);
+  return `<h2>${esc(p.name)}</h2>
+    <div class="grid2">
+      <div class="panel"><table>
+        <tr><th>Date</th><th>Competition / session</th><th class="num">Score</th></tr>
+        ${cards.map((c) => `<tr class="pick ${c.id === shown ? 'on' : ''}" data-card="${esc(c.id)}"><td>${day(c.date)}</td><td>${esc(c.name || '–')}</td>
+          <td class="num">${unaccounted(c) ? '?' : cardTotal(c, settings)}${isSkirmisher(cardType(c)) ? ` from ${c.shots.length}` : ''}</td></tr>`).join('')}
+      </table>${cards.length ? '' : '<p class="muted">No cards of this type.</p>'}</div>
+      <div class="panel">${card ? cardPanel(card) : '<p class="muted">Click a card to see it.</p>'}</div>
+    </div>`;
+}
+
+function cardPanel(c) {
+  const type = cardType(c);
+  const g = groupStats(cardShots(c));
+  return `${cardSvg(c, type, settings, cardOrder(c, settings))}
+    <div class="stats">
+      <div class="stat"><b>${unaccounted(c) ? '?' : cardTotal(c, settings)}</b><span>${isSkirmisher(type) ? `hits from ${c.shots.length} shots` : 'Score'}</span></div>
+      ${g && g.n >= 2 ? `<div class="stat"><b>${g.extreme.toFixed(1)} mm</b><span>Group size</span></div>
+        <div class="stat"><b>${g.meanRadius.toFixed(1)} mm</b><span>Mean radius</span></div>
+        <div class="stat"><b>${g.sdx.toFixed(1)} / ${g.sdy.toFixed(1)}</b><span>SD across / up (mm)</span></div>` : ''}
+    </div>
+    <p class="muted">${esc(type.label)}, ${day(c.date)}${c.name ? `, ${esc(c.name)}` : ''}.</p>
+    ${c.notes ? `<p><b>Notes:</b> ${esc(c.notes)}</p>` : ''}`;
+}
+
+function wire() {
+  document.getElementById('type')?.addEventListener('change', (e) => { type = e.target.value; shown = null; render(); });
+  document.querySelectorAll('[data-pupil]').forEach((r) => r.addEventListener('click', () => {
+    chosen = chosen === r.dataset.pupil ? null : r.dataset.pupil;
+    shown = null;
+    render();
+  }));
+  document.querySelectorAll('[data-card]').forEach((r) => r.addEventListener('click', () => { shown = r.dataset.card; render(); }));
+  document.getElementById('copy')?.addEventListener('click', async (e) => {
+    await navigator.clipboard.writeText(data.setup);
+    e.target.textContent = 'Copied';
+  });
+  document.querySelectorAll('[data-label]').forEach((input) => input.addEventListener('change', async () => {
+    await post({ id: input.dataset.label, pupil: input.value });
+  }));
+  document.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+    const d = data.devices.find((x) => x.id === b.dataset.remove);
+    if (!confirm(`Remove ${d.name}'s device and every card it sent? This cannot be undone.`)) return;
+    await post({ id: d.id, remove: true });
+  }));
+}
+
+async function post(body) {
+  const res = await fetch('/api/coach/device', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) alert('That did not save. Try again.');
+  await load();
+  render();
+}
+
+try {
+  await load();
+  render();
+} catch (err) {
+  main.innerHTML = `<div class="panel"><p class="error">Could not load the squad's cards. ${esc(err.message)}</p></div>`;
+}
+</script>
+</body>
+</html>

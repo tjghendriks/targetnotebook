@@ -1,0 +1,11 @@
+{
+  "name": "targetnotebook-coach",
+  "private": true,
+  "description": "Target Notebook coach server (Cloudflare Worker). See README.md.",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

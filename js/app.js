@@ -2,14 +2,15 @@ import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
   isOrder, resolveOrder, cardOrder, defaultOrderSpec, isSkirmisher, skirmisherTally, ellipseDistance,
-} from './model.js?v=2026.11.08-2';
-import * as store from './store.js?v=2026.11.08-2';
-import { scanCard, ScanError } from './detect.js?v=2026.11.08-2';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg, diagramMarkup as diagramMarkupFor } from './render.js?v=2026.11.08-2';
-import { CHANGES } from './changes.js?v=2026.11.08-2';
+} from './model.js?v=2026.11.25-1';
+import * as store from './store.js?v=2026.11.25-1';
+import * as coach from './coach.js?v=2026.11.25-1';
+import { scanCard, ScanError } from './detect.js?v=2026.11.25-1';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg, diagramMarkup as diagramMarkupFor } from './render.js?v=2026.11.25-1';
+import { CHANGES } from './changes.js?v=2026.11.25-1';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.11.08-2';
+const VERSION = '2026.11.25-1';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -421,6 +422,80 @@ async function mountRifle(el) {
 
 // ---------- cards list ----------
 
+// ---------- sending cards to a coach ----------
+
+// On the Dashboard: how many cards are waiting to go to the coach, with a button to send them.
+async function refreshCoachBar() {
+  const bar = $('#coach-bar');
+  if (!bar) return;
+  const me = await coach.link();
+  const { cards, deleted } = me ? await coach.pending() : { cards: [], deleted: [] };
+  const waiting = cards.length + deleted.length;
+  if (!$('#coach-bar')) return;
+  bar.hidden = !waiting;
+  if (!waiting) return;
+  const n = cards.length;
+  bar.innerHTML = `<div class="panel coach-bar">
+    <span>${n ? `${n} card${n === 1 ? '' : 's'}` : 'Changes'} not yet sent to your coach</span>
+    <button id="coach-send" class="primary">Send to coach</button></div>`;
+  $('#coach-send').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Sending…';
+    try {
+      const sent = await coach.send();
+      toast(sent ? `${sent} card${sent === 1 ? '' : 's'} sent to your coach` : 'Sent to your coach');
+    } catch (err) {
+      tell(err.message);
+    }
+    refreshCoachBar();
+  });
+}
+
+// After a card is saved or deleted, and when the app opens or comes back
+// online: send in the background if the pupil has automatic sending on.
+async function autoSend() {
+  await coach.sendIfAuto();
+  refreshCoachBar();
+}
+
+// Opened from the coach's setup link: the pupil types their name and joins.
+async function showCoachSetup() {
+  const setup = coach.setupFrom(location.hash);
+  const me = await coach.link();
+  if (!setup) {
+    view.innerHTML = `<div class="panel"><p><b>This setup link is not complete.</b></p>
+      <p class="muted">Ask your coach to send it again, and open it on this device.</p></div>`;
+    return;
+  }
+  view.innerHTML = `
+    <h2>Send your cards to your coach</h2>
+    <div class="panel">
+      <p>Your coach has asked for your scanned cards. Once you join, the app sends them your card data:
+      the shots, scores, dates, competition names and card notes. Photos, training notes and My Setup stay on this device.</p>
+      <label class="field">Your name<input id="c-name" type="text" maxlength="60" autocomplete="name"
+        placeholder="First name and surname" value="${esc(me?.name ?? '')}"></label>
+      <label class="check"><input type="checkbox" id="c-auto" ${me?.auto === false ? '' : 'checked'}> Send cards automatically when I save them</label>
+      <p class="muted">Sending to ${esc(new URL(setup.server).host)}. You can stop at any time in Settings.</p>
+      <div class="row"><button id="c-join" class="primary">${me ? 'Update' : 'Join and send my cards'}</button>
+        <a class="btn" href="#/">Not now</a></div>
+    </div>`;
+  $('#c-join').addEventListener('click', async () => {
+    const name = $('#c-name').value.trim();
+    if (!name) return tell('Please enter your name, so your coach knows whose cards they are.');
+    $('#c-join').disabled = true;
+    try {
+      await coach.join(setup, name);
+      await coach.setAuto($('#c-auto').checked);
+      const sent = await coach.send();
+      toast(sent ? `Joined. ${sent} card${sent === 1 ? '' : 's'} sent to your coach.` : 'Joined. Your cards will go to your coach as you save them.');
+      location.hash = '#/';
+    } catch (err) {
+      $('#c-join').disabled = false;
+      tell(err.message);
+    }
+  });
+}
+
 async function showCards() {
   const recs = await store.listCards();
   const notes = await store.listNotes();
@@ -467,6 +542,7 @@ async function showCards() {
       </div>
       <div id="rifle-pane" class="menu rifle" hidden></div>
     </div>
+    <div id="coach-bar" hidden></div>
     <h2>Saved cards and notes</h2>
     ${items.length ? '' : '<p class="muted">Nothing saved yet.</p>'}
     ${days.map(([date, list]) => `
@@ -506,6 +582,7 @@ async function showCards() {
   $('#add').addEventListener('click', () => show(panes.add.hidden ? 'add' : null));
   $('#rifle').addEventListener('click', () => show(panes.rifle.hidden ? 'rifle' : null));
   mountRifle(panes.rifle);
+  refreshCoachBar();
   for (const id of ['cam', 'pick']) {
     $(`#${id}`).addEventListener('change', (e) => {
       const file = e.target.files[0];
@@ -738,7 +815,10 @@ function renderCard() {
       ? await ask('Discard this scan?', 'Discard')
       : await ask('Delete this card and its shots? This cannot be undone.', 'Delete');
     if (!sure) return;
-    if (!rec.isNew) await store.deleteCard(rec.id);
+    if (!rec.isNew) {
+      await store.deleteCard(rec.id);
+      autoSend();
+    }
     current = null;
     dirty = false;
     location.hash = '#/';
@@ -769,6 +849,7 @@ async function saveCard() {
   dirty = false;
   toast('Card saved on this device');
   location.hash = '#/';
+  autoSend();
 }
 
 // Turn the whole card through 180 degrees (only for layouts that look the same
@@ -1439,7 +1520,15 @@ async function showSettings() {
     'best-effort': 'The browser may clear this data if the device runs low on space or the app goes unused. Add the app to your home screen and keep a backup.',
     unsupported: 'This browser cannot guarantee long-term storage. Keep a backup.',
   }[state];
+  const me = await coach.link();
   view.innerHTML = `
+    ${me ? `<h2>Your coach</h2>
+    <div class="panel">
+      <p>Sending your cards to your coach as <b>${esc(me.name)}</b>.${me.lastSent ? ` Last sent ${esc(niceDate(me.lastSent.slice(0, 10)))}.` : ''}</p>
+      <label class="check"><input type="checkbox" id="c-auto" ${me.auto === false ? '' : 'checked'}> Send cards automatically when I save them</label>
+      <div class="row"><button id="c-send">Send now</button><button id="c-leave" class="danger">Stop sending to coach</button></div>
+      <p class="muted">Only card data is sent, never photos. Stopping leaves the cards already sent with your coach; ask them if you want those removed.</p>
+    </div>` : ''}
     <h2>Shooter</h2>
     <div class="panel">
       <label class="field">Shoots<select id="s-hand">
@@ -1501,6 +1590,21 @@ async function showSettings() {
     showSettings();
   };
   for (const id of ['s-gauge', 's-clicks']) $(`#${id}`).addEventListener('change', save);
+  $('#c-auto')?.addEventListener('change', (e) => coach.setAuto(e.target.checked));
+  $('#c-send')?.addEventListener('click', async () => {
+    try {
+      const sent = await coach.send();
+      toast(sent ? `${sent} card${sent === 1 ? '' : 's'} sent to your coach` : 'Everything is already with your coach');
+      showSettings();
+    } catch (err) {
+      tell(err.message);
+    }
+  });
+  $('#c-leave')?.addEventListener('click', async () => {
+    if (!(await ask('Stop sending cards to your coach? You can join again from their link.', 'Stop sending'))) return;
+    await coach.leave();
+    showSettings();
+  });
   $('#s-hand').addEventListener('change', async (e) => {
     const handedness = e.target.value === 'left' ? 'left' : 'right';
     // Changing hand sets the mirror option on every default order to match.
@@ -1627,13 +1731,14 @@ async function route() {
     noteDirty = false;
   }
   $('#editor').hidden = true;
-  const tab = hash.startsWith('#/analysis') ? 'analysis' : hash.startsWith('#/settings') ? 'settings' : 'cards';
+  const tab = hash.startsWith('#/analysis') ? 'analysis' : hash.startsWith('#/settings') || hash.startsWith('#/coach-setup') ? 'settings' : 'cards';
   // A card has its own bottom bar (save and delete) in place of the tabs.
   document.body.classList.toggle('card-open', hash.startsWith('#/card/') || hash.startsWith('#/note/'));
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   window.scrollTo(0, 0);
   try {
-    if (hash.startsWith('#/card/')) await showCard(decodeURIComponent(hash.slice(7)));
+    if (hash.startsWith('#/coach-setup')) await showCoachSetup();
+    else if (hash.startsWith('#/card/')) await showCard(decodeURIComponent(hash.slice(7)));
     else if (hash.startsWith('#/note/')) await showNote(decodeURIComponent(hash.slice(7)));
     else if (tab === 'analysis') await showAnalysis();
     else if (tab === 'settings') await showSettings();
@@ -1658,5 +1763,7 @@ window.addEventListener('beforeunload', (e) => {
 
 settings = await store.getSettings();
 await route();
+autoSend();
+window.addEventListener('online', autoSend);
 setUpChanges().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');

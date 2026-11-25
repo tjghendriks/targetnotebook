@@ -5,7 +5,7 @@
 // radial symmetry (the shot hole). A Skirmisher card's oval marks are handled
 // as circles stretched to fit, and its whole box is searched for any number of holes.
 
-import { CARDS, isSkirmisher, ellipseDistance } from './model.js?v=2026.11.08-2';
+import { CARDS, isSkirmisher, ellipseDistance } from './model.js?v=2026.11.25-1';
 
 export class ScanError extends Error {}
 

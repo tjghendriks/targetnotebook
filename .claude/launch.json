@@ -9,6 +9,14 @@
         "8765"
       ],
       "port": 8765
+    },
+    {
+      "name": "mock-coach",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "dev/mock-coach.py"
+      ],
+      "port": 8787
     }
   ]
 }

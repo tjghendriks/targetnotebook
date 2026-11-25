@@ -6,3 +6,7 @@ reference/
 
 # Real shot-card photos for testing the detector (may show names), kept local only
 dev/cards/
+
+# Coach server tooling
+server/node_modules/
+server/.wrangler/

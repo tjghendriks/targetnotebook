@@ -1,6 +1,6 @@
 // On-device storage (IndexedDB): saved cards and settings.
 
-import { DEFAULT_SETTINGS } from './model.js?v=2026.11.08-2';
+import { DEFAULT_SETTINGS } from './model.js?v=2026.11.25-1';
 
 // Storage name predates the rename to Target Notebook; kept so saved cards carry over.
 const DB_NAME = 'targetscan';
@@ -74,6 +74,12 @@ export async function deleteNote(id) {
 // The newest What's new entry this device has been shown.
 export const getSeenChanges = () => run('kv', 'readonly', (s) => s.get('seenChanges'));
 export const putSeenChanges = (id) => run('kv', 'readwrite', (s) => s.put(id, 'seenChanges'));
+
+// The coach's squad this device sends cards to, if any: server, squad code,
+// the pupil's name, this device's id and secret key, and what has been sent.
+// Kept out of backups, so restoring one never copies the key to another device.
+export const getCoach = () => run('kv', 'readonly', (s) => s.get('coach'));
+export const putCoach = (coach) => run('kv', 'readwrite', (s) => (coach ? s.put(coach, 'coach') : s.delete('coach')));
 
 export async function exportData({ images }) {
   const cards = await listCards();
