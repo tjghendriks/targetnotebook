@@ -255,6 +255,12 @@ th { color: var(--muted); font-size: 12px; font-weight: 600; }
 .stat span { font-size: 12px; color: var(--muted); font-weight: 600; }
 .correction { background: var(--blue-soft); border-radius: var(--radius-sm); padding: 14px; }
 .correction b { font-size: 19px; color: var(--blue-deep); }
+/* Best possible score with the same group */
+.correction.best { margin-top: 10px; }
+.correction b small { font-size: 13px; font-weight: 600; color: var(--muted); }
+.best-toggle { margin: 10px 0 0; }
+.best-caption { text-align: center; margin: 6px 0 0; }
+.ghost { fill: none; stroke: #fff; stroke-width: 0.3; stroke-dasharray: 0.8 0.6; opacity: 0.85; }
 
 /* Busy + toast */
 #busy { position: fixed; inset: 0; background: rgba(15, 26, 44, 0.55); display: grid; place-items: center; z-index: 30; }

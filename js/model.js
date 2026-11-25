@@ -349,6 +349,33 @@ export function groupStats(shots) {
   };
 }
 
+// The most a card's group could have scored had the sights been set
+// differently: every shot is moved together by a whole number of clicks each
+// way, and the best total is kept. Where settings tie, the one nearest to
+// centring the group wins. Shots with no hole on the card stay misses, and a
+// cross-shot penalty stands whatever the sights. Null for a Skirmisher card,
+// or with fewer than two shots placed.
+export function bestWithGroup(rec, settings = DEFAULT_SETTINGS) {
+  const card = cardType(rec);
+  const shots = cardShots(rec);
+  if (isSkirmisher(card) || shots.length < 2) return null;
+  const clickMm = settings.clickMoa * MOA_MM;
+  const penalty = crossFirePenalty(rec);
+  const total = (dx, dy) => shots.reduce((t, s) => t + scoreShot(s.x + dx, s.y + dy, card, settings), 0) - penalty;
+  const { mx, my } = groupStats(shots);
+  // Far enough to bring any group on the card into the centre.
+  const reach = Math.ceil(45 / clickMm);
+  let best = { score: -Infinity };
+  for (let j = -reach; j <= reach; j++) {
+    for (let i = -reach; i <= reach; i++) {
+      const score = total(i * clickMm, j * clickMm);
+      const off = Math.hypot(i * clickMm + mx, j * clickMm + my);
+      if (score > best.score || (score === best.score && off < best.off - 1e-9)) best = { score, off, right: i, up: j };
+    }
+  }
+  return { score: best.score, current: total(0, 0), right: best.right, up: best.up, misses: rec.shots.filter(isMiss).length };
+}
+
 // Clicks needed to move the mean point of impact onto the centre.
 export function sightCorrection(stats, settings = DEFAULT_SETTINGS) {
   if (!stats) return null;

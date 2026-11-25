@@ -1,15 +1,15 @@
 import {
   CARDS, DEFAULT_TYPE, cardType, scoreShot, cardShots, cardTotal, groupStats, sightCorrection, MOA_MM,
   isShot, isMiss, shotValue, shotValues, unaccounted, scoreMargin, shotOn, slotsOn, crossFirePenalty,
-  isOrder, resolveOrder, cardOrder, defaultOrderSpec, isSkirmisher, skirmisherTally, ellipseDistance,
-} from './model.js?v=2026.11.08-2';
-import * as store from './store.js?v=2026.11.08-2';
-import { scanCard, ScanError } from './detect.js?v=2026.11.08-2';
-import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg, diagramMarkup as diagramMarkupFor } from './render.js?v=2026.11.08-2';
-import { CHANGES } from './changes.js?v=2026.11.08-2';
+  isOrder, resolveOrder, cardOrder, defaultOrderSpec, isSkirmisher, skirmisherTally, ellipseDistance, bestWithGroup,
+} from './model.js?v=2026.11.25-2';
+import * as store from './store.js?v=2026.11.25-2';
+import { scanCard, ScanError } from './detect.js?v=2026.11.25-2';
+import { cardSvg, groupSvg, trendSvg, orderSvg, shotNumberSvg, positionSvg, diagramMarkup as diagramMarkupFor } from './render.js?v=2026.11.25-2';
+import { CHANGES } from './changes.js?v=2026.11.25-2';
 
 // Shown in Settings so it is clear which release a device is running. Set with dev/set-version.py.
-const VERSION = '2026.11.08-2';
+const VERSION = '2026.11.25-2';
 
 const view = document.getElementById('view');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -57,6 +57,8 @@ const unsure = (s) => isShot(s) && s.source === 'auto' && s.confidence !== 'high
 let settings;
 // Whether the shot order section of a card is expanded (kept while the card redraws).
 let orderOpen = false;
+// Whether the card page shows its group moved to the best sight setting.
+let showBest = false;
 let current = null; // the card being viewed or edited
 let dirty = false;
 let note = null; // the training note being written or edited
@@ -186,14 +188,16 @@ function csvFor(recs) {
   return rows.join('\n') + '\n';
 }
 
-function statsBlock(card, shots) {
+// `under` goes straight under the group picture (the card page's best-setting toggle).
+function statsBlock(card, shots, under = '') {
   const st = groupStats(shots);
   if (!st || st.n < 2) return '<p class="muted">At least two shots are needed for group statistics.</p>';
   const corr = sightCorrection(st, settings);
   const part = (a) => (a.clicks ? `${a.clicks} click${a.clicks === 1 ? '' : 's'} ${a.dir}` : null);
   const moves = [part(corr.horizontal), part(corr.vertical)].filter(Boolean);
   return `
-    ${groupSvg(card, shots, st, settings)}
+    <div id="group-plot">${groupSvg(card, shots, st, settings)}</div>
+    ${under}
     <div class="stats">
       <div class="stat"><b>${st.extreme.toFixed(1)} mm</b><span>Group size (centre to centre)</span></div>
       <div class="stat"><b>${st.meanRadius.toFixed(1)} mm</b><span>Mean radius</span></div>
@@ -208,6 +212,54 @@ function statsBlock(card, shots) {
       <p class="muted">The group centre is ${Math.abs(st.mx).toFixed(1)} mm ${st.mx >= 0 ? 'right' : 'left'} and ${Math.abs(st.my).toFixed(1)} mm ${st.my >= 0 ? 'high' : 'low'}.
       One click moves the shot ${corr.clickMm.toFixed(2)} mm at 25 yards.</p>
     </div>`;
+}
+
+// What the same group could have scored with the sights set to suit it.
+function bestBlock(rec) {
+  const best = bestWithGroup(rec, settings);
+  if (!best) return '';
+  const gain = best.score - best.current;
+  const move = (n, pos, neg) => (n ? `${Math.abs(n)} click${Math.abs(n) === 1 ? '' : 's'} ${n > 0 ? pos : neg}` : null);
+  const moves = [move(best.right, 'right', 'left'), move(best.up, 'up', 'down')].filter(Boolean);
+  const misses = best.misses ? ` The ${best.misses === 1 ? 'shot' : `${best.misses} shots`} with no hole on the card count${best.misses === 1 ? 's' : ''} as a miss either way.` : '';
+  return `
+    <div class="correction best">
+      <span class="muted">Best possible score with this group</span><br>
+      <b>${best.score}${gain ? ` <small>(${gain} more than scored)</small>` : ''}</b>
+      <p class="muted">${gain
+        ? `With the sights moved ${moves.join(' and ')}.`
+        : 'No sight setting would have scored more with this group.'}${misses}</p>
+    </div>`;
+}
+
+// Under the group picture: switch between the group as shot and moved to the best sight setting.
+function bestToggle(rec) {
+  const best = bestWithGroup(rec, settings);
+  if (!best || !(best.right || best.up)) return '';
+  return `<label class="check best-toggle"><input type="checkbox" id="best-toggle" ${showBest ? 'checked' : ''}>
+      Show the group with the best sight setting</label>
+    <p class="muted best-caption" id="best-caption" hidden></p>`;
+}
+
+// Draws the card page's group as shot, or moved by the best sight setting
+// with dashed circles where the shots really were.
+function drawBest(rec) {
+  const plot = $('#group-plot');
+  const best = bestWithGroup(rec, settings);
+  if (!plot || !best) return;
+  const card = cardType(rec);
+  const shots = cardShots(rec);
+  const clickMm = settings.clickMoa * MOA_MM;
+  const on = showBest && (best.right || best.up);
+  const shown = on ? shots.map((s) => ({ ...s, x: s.x + best.right * clickMm, y: s.y + best.up * clickMm })) : shots;
+  plot.innerHTML = groupSvg(card, shown, groupStats(shown), settings, on ? shots : []);
+  const caption = $('#best-caption');
+  caption.hidden = !on;
+  caption.textContent = on
+    ? `Moved ${[best.right && `${Math.abs(best.right)} click${Math.abs(best.right) === 1 ? '' : 's'} ${best.right > 0 ? 'right' : 'left'}`,
+        best.up && `${Math.abs(best.up)} click${Math.abs(best.up) === 1 ? '' : 's'} ${best.up > 0 ? 'up' : 'down'}`].filter(Boolean).join(' and ')},
+        scoring ${best.score}. Dashed circles show where the shots really went.`
+    : '';
 }
 
 // Short name of a shot order, as the collapsed shot order section shows it.
@@ -591,6 +643,7 @@ async function showCard(id) {
     if (!current?.isNew) return void (location.hash = '#/');
   } else if (current?.id !== id || current.isNew) {
     orderOpen = false;
+    showBest = false;
     current = await store.getCard(id);
     dirty = false;
     if (!current) return void (location.hash = '#/');
@@ -696,7 +749,7 @@ function renderCard() {
       <p class="muted">In the order fired${card.shotsPerDiagram > 1 ? ' (the two shots on a diagram are listed together; which came first is not known)' : ''}. X is right of centre, Y is above centre.</p>`}
     </div>
     <h2>Group</h2>
-    <div class="panel">${statsBlock(card, shots)}</div>
+    <div class="panel">${statsBlock(card, shots, missing ? '' : bestToggle(rec))}${missing ? '' : bestBlock(rec)}</div>
     ${card.orders ? `<details class="panel order-fold" id="order-fold" ${orderOpen ? 'open' : ''}>
       <summary>Shot order for this card<span class="muted">${esc(orderLabel(card, rec.orderSpec ?? defaultOrderSpec(settings, card)))}</span></summary>
       <div id="card-order"></div>
@@ -754,6 +807,11 @@ function renderCard() {
     $('#order-fold').addEventListener('toggle', (e) => { orderOpen = e.target.open; });
   }
   $('#flip')?.addEventListener('click', flipCard);
+  $('#best-toggle')?.addEventListener('change', (e) => {
+    showBest = e.target.checked;
+    drawBest(rec);
+  });
+  if (showBest) drawBest(rec);
   $('#csv').addEventListener('click', () => download(`targetnotebook-${rec.date}.csv`, csvFor([rec]), 'text/csv'));
 }
 

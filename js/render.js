@@ -1,7 +1,7 @@
 // SVG drawings: the recreated card, a single diagram, the group plot and the score trend.
 // Units are mm; SVG y runs down, shot y runs up.
 
-import { scoreShot, isShot, isMiss, slotsOn, isSkirmisher, skirmisherTally } from './model.js?v=2026.11.08-2';
+import { scoreShot, isShot, isMiss, slotsOn, isSkirmisher, skirmisherTally } from './model.js?v=2026.11.25-2';
 
 const INK = '#1f1b19';
 const PAPER = '#e7caa2';
@@ -95,9 +95,12 @@ export function cardSvg(rec, card, settings, order) {
 }
 
 // All shots overlaid on one diagram, with the mean point of impact.
-export function groupSvg(card, shots, stats, settings) {
-  const reach = Math.max(diagramReach(card) + 4, ...shots.map((s) => Math.hypot(s.x, s.y) + 5));
-  const marks = shots.map((s) => shotMarkup({ ...s, source: 'manual' }, settings, 'faint')).join('');
+// `ghosts` are earlier positions of the same shots, drawn as dashed outlines
+// (where the group was, when showing it moved by a sight change).
+export function groupSvg(card, shots, stats, settings, ghosts = []) {
+  const reach = Math.max(diagramReach(card) + 4, ...[...shots, ...ghosts].map((s) => Math.hypot(s.x, s.y) + 5));
+  const marks = ghosts.map((s) => `<circle class="ghost" cx="${f(s.x)}" cy="${f(-s.y)}" r="${f(settings.gaugeDia / 2)}"/>`).join('') +
+    shots.map((s) => shotMarkup({ ...s, source: 'manual' }, settings, 'faint')).join('');
   const mpi = stats
     ? `<circle cx="${f(stats.mx)}" cy="${f(-stats.my)}" r="${f(stats.meanRadius)}" class="mean-ring"/>
        <path class="mpi" d="M${f(stats.mx - 2.5)} ${f(-stats.my)}h5M${f(stats.mx)} ${f(-stats.my - 2.5)}v5"/>`
