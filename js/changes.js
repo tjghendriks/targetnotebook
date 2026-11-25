@@ -9,6 +9,13 @@
 
 export const CHANGES = [
   {
+    id: '2026-11-25-best-score',
+    date: '25 November 2026',
+    major: [
+      'Best possible score: each card shows what the same group would have scored with the sights set to suit it.',
+    ],
+  },
+  {
     id: '2026-11-08-skirmisher',
     date: '8 November 2026',
     major: [
